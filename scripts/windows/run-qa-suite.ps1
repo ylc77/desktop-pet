@@ -27,8 +27,11 @@ function Add-Result([string]$Name, [string]$Category, [string]$Status, [string]$
 }
 function Invoke-QACommand([string]$Name, [string]$Command, [string]$Category = 'automatic') {
     Add-Content -Encoding UTF8 -LiteralPath $commandLog -Value "`r`n[$([DateTime]::UtcNow.ToString('o'))] $Command"
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $text = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath '$($repo.Replace("'", "''"))'; $Command" 2>&1 | Out-String).Trim()
     $code = $LASTEXITCODE
+    $ErrorActionPreference = $previousPreference
     Add-Content -Encoding UTF8 -LiteralPath $commandLog -Value "$text`r`nExitCode=$code"
     Add-Result $Name $Category $(if($code -eq 0){'passed'}else{'failed'}) $Command $text
     return $code -eq 0
