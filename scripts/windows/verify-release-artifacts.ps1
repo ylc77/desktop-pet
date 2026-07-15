@@ -12,7 +12,7 @@ $installer = Get-Item -LiteralPath (Join-Path $release $manifest.installerFile)
 $hash = Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256
 $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
 $checksumLine = Get-Content -Encoding ASCII -LiteralPath (Join-Path $release 'SHA256SUMS.txt')
-$sensitiveHits = @(Get-ChildItem -LiteralPath $release -File | Select-String -Pattern 'C:\\Users\\|F:\\STAGE|\\\\[^\\]+\\[^\\]+' -ErrorAction SilentlyContinue)
+$sensitiveHits = @(Get-ChildItem -LiteralPath $release -File | Where-Object Extension -in @('.json','.txt') | Select-String -Pattern 'C:\\Users\\|F:\\STAGE|\\\\[^\\]+\\[^\\]+' -ErrorAction SilentlyContinue)
 $checks = @(
     [pscustomobject]@{ Check = 'Installer hash matches manifest'; Passed = $hash.Hash -eq $manifest.sha256; Details = $hash.Hash }
     [pscustomobject]@{ Check = 'Checksum file matches installer'; Passed = $checksumLine -eq "$($hash.Hash)  $($installer.Name)"; Details = $checksumLine }

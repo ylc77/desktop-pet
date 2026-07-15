@@ -61,8 +61,8 @@ if ($SkipBuild) { Add-Result 'NSIS release build' 'automatic' 'skipped' 'npm run
 else { [void](Invoke-QACommand 'NSIS release build' 'npm run build:release') }
 [void](Invoke-QACommand 'Release manifest generation' "& .\scripts\create-release-manifest.ps1 -TestSummary @('QA Safe suite')")
 [void](Invoke-QACommand 'Signature, hash and manifest verification' '& .\scripts\windows\verify-release-artifacts.ps1')
-[void](Invoke-QACommand 'PowerShell syntax' '$e=@(); Get-ChildItem .\scripts -Filter *.ps1 -Recurse | ForEach-Object { try { [void][scriptblock]::Create((Get-Content -Raw -Encoding UTF8 $_.FullName)) } catch { $e += $_.Exception.Message } }; if($e.Count){$e;exit 1}else{"PowerShell syntax passed"}')
-[void](Invoke-QACommand 'Git worktree clean' '$s=& git status --porcelain; if($s){$s;exit 1}else{"Git worktree clean"}')
+[void](Invoke-QACommand 'PowerShell syntax' '$e=@(); Get-ChildItem .\scripts -Filter *.ps1 -Recurse | ForEach-Object { try { [void][scriptblock]::Create((Get-Content -Raw -Encoding UTF8 $_.FullName)) } catch { $e += $_.Exception.Message } }; if($e.Count){$e;exit 1}else{exit 0}')
+[void](Invoke-QACommand 'Git worktree clean' '$s=& git status --porcelain; if($s){$s;exit 1}else{exit 0}')
 
 if ($Mode -ne 'Safe') {
     $actions = @('Install the current NSIS package for the current user','Launch the installed app twice and inspect single-instance behavior','Wait for normal tray/context-menu exit','Inspect settings, logs, processes and autostart entries','Run the registered uninstaller and inspect leftovers')
