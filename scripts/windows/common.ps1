@@ -4,6 +4,45 @@ $script:ProductName = 'Desk Pet Framework'
 $script:ProcessName = 'desk-pet-framework'
 $script:AppIdentifier = 'dev.deskpet.framework'
 
+function ConvertTo-NormalizedProcessorArchitecture {
+    param([AllowNull()][string]$Architecture)
+    if ([string]::IsNullOrWhiteSpace($Architecture)) { return $null }
+    switch ($Architecture.ToUpperInvariant()) {
+        'AMD64' { return 'x64' }
+        'X86' { return 'x86' }
+        'ARM64' { return 'arm64' }
+        default { return $Architecture.ToLowerInvariant() }
+    }
+}
+
+function Get-NativeProcessorArchitecture {
+    param(
+        [AllowNull()][string]$ArchitectureW6432 = $env:PROCESSOR_ARCHITEW6432,
+        [AllowNull()][string]$Architecture = $env:PROCESSOR_ARCHITECTURE,
+        [Nullable[bool]]$Is64BitOperatingSystem = $null
+    )
+    $native = $ArchitectureW6432
+    if ([string]::IsNullOrWhiteSpace($native)) { $native = $Architecture }
+    if ([string]::IsNullOrWhiteSpace($native)) {
+        $osIs64Bit = if ($null -eq $Is64BitOperatingSystem) { [System.Environment]::Is64BitOperatingSystem } else { [bool]$Is64BitOperatingSystem }
+        $native = if ($osIs64Bit) { 'AMD64' } else { 'x86' }
+    }
+    ConvertTo-NormalizedProcessorArchitecture $native
+}
+
+function Get-CurrentProcessArchitecture {
+    param(
+        [AllowNull()][string]$Architecture = $env:PROCESSOR_ARCHITECTURE,
+        [Nullable[bool]]$Is64BitProcess = $null
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Architecture)) {
+        return ConvertTo-NormalizedProcessorArchitecture $Architecture
+    }
+    $processIs64Bit = if ($null -eq $Is64BitProcess) { [System.Environment]::Is64BitProcess } else { [bool]$Is64BitProcess }
+    if ($processIs64Bit) { return Get-NativeProcessorArchitecture }
+    return 'x86'
+}
+
 function Get-DeskPetInstallRecords {
     $roots = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',

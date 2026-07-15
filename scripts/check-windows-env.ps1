@@ -3,6 +3,7 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\windows\common.ps1"
 $results = [System.Collections.Generic.List[object]]::new()
 
 function Add-Result([string]$Name, [bool]$Passed, [string]$Details, [bool]$Required = $true) {
@@ -49,7 +50,9 @@ $webViewKeys = @(
 $webViewVersion = $webViewKeys | ForEach-Object { Get-ItemPropertyValue -Path $_ -Name pv -ErrorAction SilentlyContinue } | Where-Object { $_ } | Select-Object -First 1
 Add-Result 'WebView2 Runtime' ([bool]$webViewVersion) $(if ($webViewVersion) { "Evergreen Runtime $webViewVersion" } else { 'Runtime not found in EdgeUpdate registry; installed app startup requires WebView2.' }) $false
 
-Add-Result 'Process architecture' ([Environment]::Is64BitProcess) "OS=$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture); Process=$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"
+$nativeArchitecture = Get-NativeProcessorArchitecture
+$processArchitecture = Get-CurrentProcessArchitecture
+Add-Result 'Architecture detection' (-not [string]::IsNullOrWhiteSpace($nativeArchitecture) -and -not [string]::IsNullOrWhiteSpace($processArchitecture)) "Native=$nativeArchitecture; OS64=$([Environment]::Is64BitOperatingSystem); Process=$processArchitecture; Process64=$([Environment]::Is64BitProcess)"
 Add-Result 'Required environment variables' ([bool]$env:PATH -and [bool]$env:USERPROFILE) 'PATH and USERPROFILE are defined.'
 
 $results | Format-Table -AutoSize

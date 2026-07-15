@@ -9,6 +9,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\common.ps1"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if ($WhatIfPreference) {
@@ -40,7 +41,11 @@ function Invoke-QACommand([string]$Name, [string]$Command, [string]$Category = '
 $environment = [ordered]@{
     capturedAtUtc=[DateTime]::UtcNow.ToString('o'); mode=$Mode; computerName=$env:COMPUTERNAME
     os=(Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,OSArchitecture)
-    powershell=$PSVersionTable.PSVersion.ToString(); processArchitecture=[Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
+    powershell=$PSVersionTable.PSVersion.ToString()
+    nativeProcessorArchitecture=Get-NativeProcessorArchitecture
+    is64BitOperatingSystem=[System.Environment]::Is64BitOperatingSystem
+    processArchitecture=Get-CurrentProcessArchitecture
+    is64BitProcess=[System.Environment]::Is64BitProcess
     webView2=$null; testEnvironments=$null
 }
 $webView = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
