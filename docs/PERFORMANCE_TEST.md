@@ -13,10 +13,18 @@
 8 小时测试：
 
 ```powershell
-.\scripts\windows\monitor-process.ps1 -DurationMinutes 480 -IntervalSeconds 30
+.\scripts\windows\monitor-process.ps1 -DurationMinutes 480 -IntervalSeconds 60 -OutputPath .\qa-results\performance\eight-hour.csv
+.\scripts\windows\analyze-performance.ps1 -InputPath .\qa-results\performance\eight-hour.csv -OutputPath .\qa-results\performance\eight-hour-summary.md
 ```
 
-默认 CSV 写入忽略版本控制的 `temp/performance-samples.csv`，字段包括 UTC 时间、PID、归一化 CPU 百分比、Working Set、Private Memory、Handle 数量和 Thread 数量。进程不存在时脚本返回非零退出码。
+短时自动采样可使用 10–15 分钟；界面循环仍需 Computer Use 或测试者实际操作：
+
+```powershell
+.\scripts\windows\monitor-process.ps1 -DurationMinutes 15 -IntervalSeconds 10 -OutputPath .\qa-results\performance\short.csv
+.\scripts\windows\analyze-performance.ps1 -InputPath .\qa-results\performance\short.csv -OutputPath .\qa-results\performance\short-summary.md
+```
+
+默认 CSV 写入忽略版本控制的 `temp/performance-samples.csv`，字段包括 UTC 时间、PID、归一化 CPU 百分比、Working Set、Private Memory、Handle 数量和 Thread 数量。每个样本立即追加到 CSV，中断后已写入数据仍然存在。进程不存在时脚本返回非零退出码。
 
 ## 测试阶段
 

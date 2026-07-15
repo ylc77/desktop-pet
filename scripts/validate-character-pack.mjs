@@ -2,7 +2,10 @@ import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PNG } from "pngjs";
 
-const root = path.resolve("public/characters");
+const rootArgumentIndex = process.argv.indexOf("--root");
+const requestedRoot = rootArgumentIndex >= 0 ? process.argv[rootArgumentIndex + 1] : "public/characters";
+if (!requestedRoot) throw new Error("--root requires a directory path");
+const root = path.resolve(requestedRoot);
 const stateName = /^[a-z][a-z0-9_-]*$/;
 const characterId = /^[a-z0-9_][a-z0-9_-]*$/;
 const frameName = /^([a-z][a-z0-9_-]*)_(\d{4})\.png$/;

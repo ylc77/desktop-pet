@@ -1,0 +1,19 @@
+<Configuration>
+  <Networking>Default</Networking>
+  <ClipboardRedirection>Disable</ClipboardRedirection>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>C:\DeskPetQA\Input</HostFolder>
+      <SandboxFolder>C:\DeskPetQA\Input</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>C:\DeskPetQA\Results</HostFolder>
+      <SandboxFolder>C:\DeskPetQA\Results</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\DeskPetQA\Input\scripts\windows\sandbox\bootstrap.ps1</Command>
+  </LogonCommand>
+</Configuration>

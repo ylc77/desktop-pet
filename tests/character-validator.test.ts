@@ -30,4 +30,7 @@ describe("validateManifest", () => {
   it("rejects hitboxes outside the frame", () => {
     expect(validateManifest({ ...valid, hitbox: { x: 0.8, y: 0, width: 0.4, height: 1 } }).valid).toBe(false);
   });
+  it("rejects a manifest without idle", () => {
+    expect(validateManifest({ ...valid, animations: { click: { path: "animations/click", fps: 8, loop: false } } }).valid).toBe(false);
+  });
 });

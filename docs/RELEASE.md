@@ -34,6 +34,16 @@ Rust 测试 profile 不生成调试符号并关闭增量编译，以降低 Windo
 
 这些脚本用于可重复记录本机状态，不能代替干净 Windows、真实升级路径或企业网络环境测试。
 
+统一 QA 入口：
+
+```powershell
+.\scripts\windows\run-qa-suite.ps1 -Mode Safe
+.\scripts\windows\run-qa-suite.ps1 -Mode CurrentMachine -WhatIf
+.\scripts\windows\run-qa-suite.ps1 -Mode CleanEnvironment -WhatIf
+```
+
+Safe 模式只执行非破坏性构建、测试、哈希、签名状态、清单和 Git 检查。CurrentMachine 会先列出安装、启动、正常退出等待、开机启动检查和卸载动作，再由 PowerShell 确认机制决定是否执行。CleanEnvironment 不根据主机名判断安全性，必须在明确指定的可丢弃环境中设置 `DESK_PET_QA_CLEAN_ENVIRONMENT=1`。
+
 ## Release 可追溯信息
 
 成功构建并完成测试后运行：

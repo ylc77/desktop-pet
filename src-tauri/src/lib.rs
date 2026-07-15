@@ -642,6 +642,22 @@ mod tests {
         assert!(directory.join(result.backup_file.unwrap()).exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
+
+    #[test]
+    fn invalid_utf8_settings_are_moved_out_of_the_active_path() {
+        let directory = temporary_settings_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0x7b]).unwrap();
+
+        let result = read_settings_at_path(&path).unwrap();
+
+        assert!(result.recovered);
+        assert!(result.value.is_none());
+        assert!(!path.exists());
+        assert!(directory.join(result.backup_file.unwrap()).exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 fn show_main<R: Runtime>(app: &AppHandle<R>) {

@@ -11,4 +11,13 @@ describe("settings schema", () => {
     expect(result.recovered).toBe(true);
     expect(result.settings).toEqual(DEFAULT_SETTINGS);
   });
+  it("fills missing settings fields from defaults", () => {
+    const result = parseSettings({ position: { x: 999999, y: -999999 }, scale: 1 });
+    expect(result.recovered).toBe(false);
+    expect(result.settings.position).toEqual({ x: 999999, y: -999999 });
+    expect(result.settings.opacity).toBe(DEFAULT_SETTINGS.opacity);
+  });
+  it("accepts finite off-screen coordinates for the native recovery layer", () => {
+    expect(appSettingsSchema.parse({ ...DEFAULT_SETTINGS, position: { x: -100000, y: 100000 } }).position).toEqual({ x: -100000, y: 100000 });
+  });
 });

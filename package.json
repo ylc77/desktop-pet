@@ -15,7 +15,8 @@
     "validate:characters": "node scripts/validate-character-pack.mjs",
     "generate:placeholder": "node scripts/generate-placeholder.mjs",
     "check:windows-env": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-windows-env.ps1",
-    "release:manifest": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-release-manifest.ps1"
+    "release:manifest": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-release-manifest.ps1",
+    "qa:safe": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/run-qa-suite.ps1 -Mode Safe"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
