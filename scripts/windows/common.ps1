@@ -150,6 +150,96 @@ function Select-DeskPetInstallRecord {
     }
 }
 
+function Get-NoAvailableUninstallCommandMessage {
+    return -join @([char]0x6CA1,[char]0x6709,[char]0x53EF,[char]0x7528,[char]0x5378,[char]0x8F7D,[char]0x547D,[char]0x4EE4)
+}
+
+function ConvertFrom-NativeCommandLine {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$CommandLine)
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { throw (Get-NoAvailableUninstallCommandMessage) }
+    $expanded = [Environment]::ExpandEnvironmentVariables($CommandLine).Trim()
+    $filePath = $null
+    $argumentText = $null
+    if ($expanded -match '^"(?<file>[^"]+)"(?:\s+(?<arguments>.*))?$') {
+        $filePath = [string]$Matches['file']
+        $argumentText = [string]$Matches['arguments']
+    } elseif ($expanded -match '^(?<file>.+?\.exe)(?:\s+(?<arguments>.*))?$') {
+        $filePath = ([string]$Matches['file']).Trim()
+        $argumentText = [string]$Matches['arguments']
+    } else {
+        throw 'The uninstall command format cannot be parsed safely.'
+    }
+    if ([string]::IsNullOrWhiteSpace($filePath) -or -not [System.IO.Path]::IsPathRooted($filePath)) {
+        throw 'The uninstaller path is not a valid absolute path.'
+    }
+    try { $filePath = [System.IO.Path]::GetFullPath($filePath) } catch { throw 'The uninstaller path format is invalid.' }
+    if ([string]::IsNullOrWhiteSpace($argumentText)) { $argumentList = [string[]]@() }
+    else { $argumentList = [string[]]@($argumentText.Trim()) }
+    [pscustomobject]@{ FilePath=$filePath; ArgumentList=$argumentList }
+}
+
+function Resolve-DeskPetUninstallCommand {
+    param(
+        [Parameter(Mandatory)][object]$Record,
+        [scriptblock]$FileExists = { param($Path) [System.IO.File]::Exists($Path) }
+    )
+    $candidates = @(
+        [pscustomobject]@{ Source='QuietUninstallString'; Value=[string](Get-ObjectPropertyValue $Record 'QuietUninstallString') },
+        [pscustomobject]@{ Source='UninstallString'; Value=[string](Get-ObjectPropertyValue $Record 'UninstallString') }
+    )
+    $errors = @()
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate.Value)) { continue }
+        try {
+            $parsed = ConvertFrom-NativeCommandLine -CommandLine $candidate.Value
+            if (-not (& $FileExists $parsed.FilePath)) {
+                $errors += "$($candidate.Source) points to a missing or unavailable executable."
+                continue
+            }
+            return [pscustomobject]@{
+                Source=$candidate.Source
+                FilePath=$parsed.FilePath
+                ArgumentList=$parsed.ArgumentList
+                RedactedFilePath=ConvertTo-RedactedNativePath $parsed.FilePath
+            }
+        } catch {
+            $errors += "$($candidate.Source): $($_.Exception.Message)"
+        }
+    }
+    if ($errors.Count) { throw ((Get-NoAvailableUninstallCommandMessage) + ': ' + ($errors -join ' ')) }
+    throw (Get-NoAvailableUninstallCommandMessage)
+}
+
+function Select-DeskPetUninstallRecord {
+    param(
+        [AllowEmptyCollection()][object[]]$Records = @(),
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [scriptblock]$FileExists = { param($Path) [System.IO.File]::Exists($Path) }
+    )
+    $evaluations = @()
+    foreach ($record in @($Records)) {
+        $displayName = [string](Get-ObjectPropertyValue $record 'DisplayName')
+        $displayVersion = [string](Get-ObjectPropertyValue $record 'DisplayVersion')
+        $psPath = [string](Get-ObjectPropertyValue $record 'PSPath')
+        $reasons = @()
+        $command = $null
+        if ($displayName -ne $script:ProductName) { $reasons += 'DisplayName is not an exact match.' }
+        if ($displayVersion -ne $ExpectedVersion) { $reasons += "DisplayVersion does not match $ExpectedVersion." }
+        try { $command = Resolve-DeskPetUninstallCommand -Record $record -FileExists $FileExists } catch { $reasons += $_.Exception.Message }
+        $evaluations += [pscustomobject]@{
+            Record=$record; DisplayName=$displayName; DisplayVersion=$displayVersion; Command=$command
+            CurrentUser=($psPath -match 'HKEY_CURRENT_USER|HKCU:'); Usable=($reasons.Count -eq 0); Reasons=@($reasons)
+        }
+    }
+    $selected = @($evaluations | Where-Object { $_.Usable } | Sort-Object @{Expression='CurrentUser';Descending=$true}) | Select-Object -First 1
+    [pscustomobject]@{
+        SelectedRecord=$(if ($selected) { $selected.Record } else { $null })
+        Command=$(if ($selected) { $selected.Command } else { $null })
+        Evaluation=$(if ($selected) { $selected } else { $null })
+        Evaluations=@($evaluations)
+    }
+}
+
 function Write-QAResultArtifacts {
     param(
         [Parameter(Mandatory)][string]$OutputDirectory,
@@ -159,11 +249,14 @@ function Write-QAResultArtifacts {
         [AllowNull()][string]$FailureMessage,
         [AllowNull()][object]$Transaction
     )
-    [System.IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
-    ConvertTo-Json -InputObject @($Results) -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'qa-results.json'))
-    if ($null -ne $Transaction) {
-        $Transaction | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'current-machine-state.json'))
-    }
+    $savedWhatIfPreference = $WhatIfPreference
+    $WhatIfPreference = $false
+    try {
+        [System.IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
+        ConvertTo-Json -InputObject @($Results) -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'qa-results.json'))
+        if ($null -ne $Transaction) {
+            $Transaction | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'current-machine-state.json'))
+        }
     $passed = @($Results | Where-Object { $_.status -eq 'passed' })
     $failed = @($Results | Where-Object { $_.status -eq 'failed' })
     $blocked = @($Results | Where-Object { $_.status -eq 'blocked' })
@@ -177,7 +270,10 @@ function Write-QAResultArtifacts {
         @($blocked | ForEach-Object { "- $($_.name): $($_.details)" }) + @('', '## Manual Windows checks', '',
         '- Real Windows 10/11, multi-monitor and DPI, sleep/wake, SmartScreen, tray interaction, and eight-hour performance testing.', '',
         "## Skipped ($($skipped.Count))", '') + @($skipped | ForEach-Object { "- $($_.name): $($_.details)" })
-    ($summary -join [Environment]::NewLine) | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'qa-summary.md'))
+        ($summary -join [Environment]::NewLine) | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'qa-summary.md'))
+    } finally {
+        $WhatIfPreference = $savedWhatIfPreference
+    }
 }
 
 function Get-DeskPetInstallRecords {

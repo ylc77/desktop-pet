@@ -4,34 +4,45 @@ param([int]$TimeoutSeconds = 180)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
+$repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
+$expectedVersion = Get-DeskPetReleaseVersion -RepositoryRoot $repo
 
 $records = @(Get-DeskPetInstallRecords)
 if ($records.Count -eq 0 -and $WhatIfPreference) { Write-Host 'No installed application record; uninstall preview has no action.'; exit 0 }
-if ($records.Count -ne 1) { throw "Expected one installed application record; found $($records.Count)." }
 if (Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue) { throw 'Application is running. Exit through the tray before uninstalling.' }
-$record = $records[0]
+$selection = Select-DeskPetUninstallRecord -Records $records -ExpectedVersion $expectedVersion
+if (-not $selection.SelectedRecord) {
+    $details = @($selection.Evaluations | ForEach-Object { "display=$($_.DisplayName); version=$($_.DisplayVersion); reasons=$($_.Reasons -join ' ')" }) -join ' | '
+    throw "$(Get-NoAvailableUninstallCommandMessage). records=$($records.Count); $details"
+}
+$record = $selection.SelectedRecord
+$command = $selection.Command
+$displayName = [string](Get-ObjectPropertyValue $record 'DisplayName')
+$displayVersion = [string](Get-ObjectPropertyValue $record 'DisplayVersion')
 $rawInstallLocation = [string](Get-ObjectPropertyValue $record 'InstallLocation')
 $installLocation = $null
 try { $installLocation = [System.IO.Path]::GetDirectoryName((Join-NativeFileSystemPath $rawInstallLocation 'placeholder.file')) } catch { $installLocation = $null }
-$quietUninstall = [string](Get-ObjectPropertyValue $record 'QuietUninstallString')
-$commandLine = if (-not [string]::IsNullOrWhiteSpace($quietUninstall)) { $quietUninstall } else { [string](Get-ObjectPropertyValue $record 'UninstallString') }
-if ($commandLine -notmatch '^\s*"([^"]+)"\s*(.*)$' -and $commandLine -notmatch '^\s*(\S+)\s*(.*)$') { throw 'Cannot safely parse uninstall command.' }
-$uninstaller = $Matches[1]
-$arguments = $Matches[2]
 
-if (-not $PSCmdlet.ShouldProcess($uninstaller, 'Run registered uninstaller')) { Write-Host "Would run: $uninstaller $arguments"; exit 0 }
-$process = Start-Process -FilePath $uninstaller -ArgumentList $arguments -PassThru -WindowStyle Hidden
+Write-Host "Selected application: $displayName $displayVersion"
+Write-Host "Selected uninstall command: source=$($command.Source); file=$($command.RedactedFilePath); argumentCount=$($command.ArgumentList.Count)"
+if (-not $PSCmdlet.ShouldProcess("$displayName $displayVersion ($($command.RedactedFilePath))", 'Run registered uninstaller')) { exit 0 }
+$startParameters = @{ FilePath=$command.FilePath; PassThru=$true }
+if ($command.ArgumentList.Count -gt 0) { $startParameters.ArgumentList = $command.ArgumentList }
+$process = Start-Process @startParameters
 if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { throw "Uninstaller timed out after $TimeoutSeconds seconds." }
 if ($process.ExitCode -ne 0) { throw "Uninstaller exited with code $($process.ExitCode)." }
 $remaining = @(Get-DeskPetInstallRecords)
 $running = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue)
 $autostart = @(Get-DeskPetRunEntries)
 $dataDirectory = Join-Path $env:APPDATA $script:AppIdentifier
+$startMenuRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+$startMenuMatches = @(Get-ChildItem -LiteralPath $startMenuRoot -Filter '*Desk Pet*' -Recurse -ErrorAction SilentlyContinue)
 $results = @(
     Write-SmokeResult 'Uninstall registry removed' ($remaining.Count -eq 0) "remaining=$($remaining.Count)"
     Write-SmokeResult 'No remaining process' ($running.Count -eq 0) "remaining=$($running.Count)"
     Write-SmokeResult 'Program directory removed' (-not $installLocation -or -not [System.IO.Directory]::Exists($installLocation)) $(if ($installLocation) { ConvertTo-RedactedNativePath $installLocation } else { 'InstallLocation was empty or invalid.' })
     Write-SmokeResult 'Autostart entry removed' ($autostart.Count -eq 0) "remaining=$($autostart.Count)"
+    Write-SmokeResult 'Start menu entries removed' ($startMenuMatches.Count -eq 0) "remaining=$($startMenuMatches.Count)"
     Write-SmokeResult 'User settings policy' $true $(if (Test-Path -LiteralPath $dataDirectory) { 'User data retained by design.' } else { 'No user data directory remained.' })
 )
 $results | Format-Table -AutoSize

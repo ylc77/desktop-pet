@@ -4,7 +4,8 @@ param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\qa-results'),
     [switch]$SkipBuild,
     [switch]$SkipInstall,
-    [switch]$SkipPerformance
+    [switch]$SkipPerformance,
+    [ValidateSet('Beginning','Uninstallation')][string]$ResumeFromPhase = 'Beginning'
 )
 
 Set-StrictMode -Version Latest
@@ -12,15 +13,22 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
-if ($WhatIfPreference) {
-    Write-Host "QA suite preview: Mode=$Mode; OutputDirectory=$output; SkipBuild=$SkipBuild; SkipInstall=$SkipInstall; SkipPerformance=$SkipPerformance"
+if ($ResumeFromPhase -ne 'Beginning' -and $Mode -ne 'CurrentMachine') { throw '-ResumeFromPhase Uninstallation requires -Mode CurrentMachine.' }
+if ($WhatIfPreference -and $ResumeFromPhase -eq 'Beginning') {
+    Write-Host "QA suite preview: Mode=$Mode; OutputDirectory=$output; SkipBuild=$SkipBuild; SkipInstall=$SkipInstall; SkipPerformance=$SkipPerformance; ResumeFromPhase=$ResumeFromPhase"
     Write-Host 'Safe checks would run first. CurrentMachine/CleanEnvironment would additionally request confirmation before install, launch, normal-exit wait, autostart inspection, uninstall, and leftover checks.'
     exit 0
 }
 $directories = @($output, (Join-Path $output 'screenshots'), (Join-Path $output 'performance'), (Join-Path $output 'install'), (Join-Path $output 'uninstall'))
-$directories | ForEach-Object { New-Item -ItemType Directory -Path $_ -Force | Out-Null }
+$savedWhatIfForOutput = $WhatIfPreference
+$WhatIfPreference = $false
+try { $directories | ForEach-Object { New-Item -ItemType Directory -Path $_ -Force | Out-Null } } finally { $WhatIfPreference = $savedWhatIfForOutput }
 $commandLog = Join-Path $output 'command-log.txt'
-if (-not [System.IO.File]::Exists($commandLog)) { Set-Content -Encoding UTF8 -LiteralPath $commandLog -Value '' }
+if (-not [System.IO.File]::Exists($commandLog)) {
+    $savedWhatIfForOutput = $WhatIfPreference
+    $WhatIfPreference = $false
+    try { Set-Content -Encoding UTF8 -LiteralPath $commandLog -Value '' } finally { $WhatIfPreference = $savedWhatIfForOutput }
+}
 $results = @()
 $env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')
 
@@ -43,6 +51,29 @@ function Assert-QACommand([string]$Name, [string]$Command, [string]$Category = '
     if (-not (Invoke-QACommand $Name $Command $Category)) { throw "QA command failed: $Name" }
 }
 
+function Update-QATransactionState([System.Collections.IDictionary]$State) {
+    $finalRecords = @(Get-DeskPetInstallRecords)
+    $State['uninstallRecordCount'] = $finalRecords.Count
+    $State['installationDetected'] = [bool]$State['installationDetected'] -or $finalRecords.Count -gt 0
+    $State['processCount'] = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue).Count
+    $State['autostartEntryCount'] = @(Get-DeskPetRunEntries).Count
+    $startMenuRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+    $State['startMenuEntryCount'] = @(Get-ChildItem -LiteralPath $startMenuRoot -Filter '*Desk Pet*' -Recurse -ErrorAction SilentlyContinue).Count
+    $State['installRecords'] = @($finalRecords | ForEach-Object {
+        $rawLocation = [string](Get-ObjectPropertyValue $_ 'InstallLocation')
+        $directoryExists = $false
+        try {
+            $directory = [System.IO.Path]::GetDirectoryName((Join-NativeFileSystemPath $rawLocation 'placeholder.file'))
+            $directoryExists = [System.IO.Directory]::Exists($directory)
+        } catch { $directoryExists = $false }
+        [ordered]@{
+            displayName=[string](Get-ObjectPropertyValue $_ 'DisplayName'); displayVersion=[string](Get-ObjectPropertyValue $_ 'DisplayVersion')
+            installLocation=ConvertTo-RedactedNativePath $rawLocation; installDirectoryExists=$directoryExists
+            currentUser=([string](Get-ObjectPropertyValue $_ 'PSPath') -match 'HKEY_CURRENT_USER|HKCU:')
+        }
+    })
+}
+
 $currentPhase = 'initialization'
 $failureMessage = $null
 $exitCode = 0
@@ -52,6 +83,44 @@ $transaction = [ordered]@{
         "Get-Process -Name '$script:ProcessName' -ErrorAction SilentlyContinue",
         '.\scripts\windows\uninstall-smoke-test.ps1 -WhatIf'
     )
+}
+
+if ($ResumeFromPhase -eq 'Uninstallation') {
+    try {
+        $currentPhase = 'uninstall-record-selection'
+        $records = @(Get-DeskPetInstallRecords)
+        $selection = Select-DeskPetUninstallRecord -Records $records -ExpectedVersion (Get-DeskPetReleaseVersion -RepositoryRoot $repo)
+        foreach ($evaluation in @($selection.Evaluations | Where-Object { -not $_.Usable })) {
+            Add-Result 'Stale or unusable uninstall record' 'current-machine' 'blocked' '' ("display={0}; version={1}; reasons={2}" -f $evaluation.DisplayName, $evaluation.DisplayVersion, ($evaluation.Reasons -join ' '))
+        }
+        if (-not $selection.SelectedRecord) { throw (Get-NoAvailableUninstallCommandMessage) }
+        $selectedName = [string](Get-ObjectPropertyValue $selection.SelectedRecord 'DisplayName')
+        $selectedVersion = [string](Get-ObjectPropertyValue $selection.SelectedRecord 'DisplayVersion')
+        Write-Host "Selected application: $selectedName $selectedVersion"
+        Write-Host "Selected uninstaller: $($selection.Command.RedactedFilePath) (source=$($selection.Command.Source))"
+        Add-Result 'Uninstall record selection' 'current-machine' 'passed' '' "display=$selectedName; version=$selectedVersion; uninstaller=$($selection.Command.RedactedFilePath); source=$($selection.Command.Source)"
+        if ($PSCmdlet.ShouldProcess("$selectedName $selectedVersion ($($selection.Command.RedactedFilePath))", 'Run uninstall-only QA and leftover checks')) {
+            $currentPhase = 'uninstallation'
+            Assert-QACommand 'Uninstall application' '& .\scripts\windows\uninstall-smoke-test.ps1 -Confirm:$false'
+            $currentPhase = 'post-uninstall-leftovers'
+            Assert-QACommand 'Post-uninstall leftovers' '& .\scripts\windows\check-leftovers.ps1'
+            $currentPhase = 'completed'
+        } else {
+            Add-Result 'Uninstall-only lifecycle' 'manual' 'skipped' '' 'Declined or previewed by ShouldProcess/WhatIf.'
+            $currentPhase = 'preview-completed'
+        }
+    } catch {
+        $failureMessage = $_.Exception.Message
+        $exitCode = 2
+        Add-Result 'QA suite exception' 'transaction' 'failed' '' "phase=$currentPhase; $failureMessage"
+    } finally {
+        $transaction.phase = $currentPhase
+        try { Update-QATransactionState $transaction } catch { $transaction['stateInspectionError'] = $_.Exception.Message }
+        Write-QAResultArtifacts -OutputDirectory $output -Results $results -Mode $Mode -Phase $currentPhase -FailureMessage $failureMessage -Transaction $transaction
+    }
+    Write-Host "QA report written to: $output"
+    if ($exitCode -ne 0 -or @($results | Where-Object status -eq 'failed').Count) { exit 2 }
+    exit 0
 }
 try {
     $currentPhase = 'environment-capture'
@@ -130,20 +199,7 @@ try {
 } finally {
     $transaction.phase = $currentPhase
     if ($Mode -ne 'Safe') {
-        try {
-            $finalRecords = @(Get-DeskPetInstallRecords)
-            $transaction.uninstallRecordCount = $finalRecords.Count
-            $transaction.installationDetected = $transaction.installationDetected -or $finalRecords.Count -gt 0
-            $transaction.installRecords = @($finalRecords | ForEach-Object {
-                [ordered]@{
-                    displayName=[string](Get-ObjectPropertyValue $_ 'DisplayName')
-                    displayVersion=[string](Get-ObjectPropertyValue $_ 'DisplayVersion')
-                    installLocation=ConvertTo-RedactedNativePath ([string](Get-ObjectPropertyValue $_ 'InstallLocation'))
-                    currentUser=([string](Get-ObjectPropertyValue $_ 'PSPath') -match 'HKEY_CURRENT_USER|HKCU:')
-                }
-            })
-        } catch { $transaction['installRecordInspectionError'] = $_.Exception.Message }
-        $transaction.processCount = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue).Count
+        try { Update-QATransactionState $transaction } catch { $transaction['stateInspectionError'] = $_.Exception.Message }
     }
     Write-QAResultArtifacts -OutputDirectory $output -Results $results -Mode $Mode -Phase $currentPhase -FailureMessage $failureMessage -Transaction $transaction
 }
