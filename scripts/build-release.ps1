@@ -27,6 +27,7 @@ try {
     if (-not (Test-Path -LiteralPath $tauri)) { throw 'Tauri CLI is not installed. Run npm install first.' }
     & $tauri build --bundles nsis
     if ($LASTEXITCODE -ne 0) { throw "Tauri release build failed with exit code $LASTEXITCODE." }
+    & (Join-Path $repo 'scripts\create-release-manifest.ps1')
 } finally {
     Pop-Location
 }

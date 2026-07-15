@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ProcessName = 'desk-pet-framework',
+    [string]$ProcessName,
     [ValidateRange(1, 86400)][int]$IntervalSeconds = 10,
     [ValidateRange(1, 10080)][int]$DurationMinutes = 60,
     [ValidateRange(0, 86400)][int]$DurationSeconds = 0,
@@ -9,6 +9,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\common.ps1"
+if ([string]::IsNullOrWhiteSpace($ProcessName)) { $ProcessName = $script:ProcessName }
 $parent = Split-Path -Parent $OutputPath
 if ($parent) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
 $deadline = if ($DurationSeconds -gt 0) { [DateTime]::UtcNow.AddSeconds($DurationSeconds) } else { [DateTime]::UtcNow.AddMinutes($DurationMinutes) }

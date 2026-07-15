@@ -2,7 +2,7 @@
 name = "desk-pet-framework"
 version = "0.1.0"
 description = "A reusable offline Windows desktop pet framework"
-authors = ["Desk Pet Framework Contributors"]
+authors = ["七酱桌宠 Contributors"]
 edition = "2021"
 
 [lib]

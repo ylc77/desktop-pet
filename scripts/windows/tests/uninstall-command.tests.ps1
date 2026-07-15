@@ -18,13 +18,14 @@ function Test-Throws([string]$Name, [scriptblock]$Action, [string]$Pattern) {
 }
 $exists = { $true }
 
-$normalRecord = [pscustomobject]@{ QuietUninstallString=''; UninstallString='"C:\Program Files\Desk Pet Framework\uninstall.exe"' }
+$normalUninstaller = [System.IO.Path]::Combine('C:\Program Files', $script:ProductName, 'uninstall.exe')
+$normalRecord = [pscustomobject]@{ QuietUninstallString=''; UninstallString=('"' + $normalUninstaller + '"') }
 $normal = Resolve-DeskPetUninstallCommand -Record $normalRecord -FileExists $exists
 Test-Equal 'Empty quiet command falls back to normal command' 'UninstallString' $normal.Source
-Test-Equal 'Quoted executable path is unwrapped' 'C:\Program Files\Desk Pet Framework\uninstall.exe' $normal.FilePath
+Test-Equal 'Quoted executable path is unwrapped' $normalUninstaller $normal.FilePath
 Test-Equal 'Command without arguments produces an empty array' 0 $normal.ArgumentList.Count
 
-$quietRecord = [pscustomobject]@{ QuietUninstallString='"C:\Program Files\Desk Pet Framework\uninstall.exe" /S'; UninstallString='"C:\Fallback\uninstall.exe"' }
+$quietRecord = [pscustomobject]@{ QuietUninstallString=('"' + $normalUninstaller + '" /S'); UninstallString='"C:\Fallback\uninstall.exe"' }
 $quiet = Resolve-DeskPetUninstallCommand -Record $quietRecord -FileExists $exists
 Test-Equal 'Valid quiet command takes precedence' 'QuietUninstallString' $quiet.Source
 Test-Equal 'Quiet command keeps its registered arguments' '/S' $quiet.ArgumentList[0]
@@ -44,8 +45,8 @@ Test-Equal 'Chinese path with spaces parses safely' $chinesePath $chinese.FilePa
 Test-Equal 'Command arguments remain separate from executable path' '/LANG=zh_CN /PROMPT' $chinese.ArgumentList[0]
 
 $records = @(
-    [pscustomobject]@{ DisplayName='Desk Pet Framework'; DisplayVersion='0.0.9'; QuietUninstallString=''; UninstallString='"Z:\Old\uninstall.exe"'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\Old' },
-    [pscustomobject]@{ DisplayName='Desk Pet Framework'; DisplayVersion='0.1.0'; QuietUninstallString=''; UninstallString='"C:\Current\uninstall.exe"'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Current' }
+    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion='0.0.9'; QuietUninstallString=''; UninstallString='"Z:\Old\uninstall.exe"'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\Old' },
+    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion='0.1.0'; QuietUninstallString=''; UninstallString='"C:\Current\uninstall.exe"'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Current' }
 )
 $selection = Select-DeskPetUninstallRecord -Records $records -ExpectedVersion '0.1.0' -FileExists $exists
 Test-Equal 'Multiple records select matching current version' 'C:\Current\uninstall.exe' $selection.Command.FilePath

@@ -22,35 +22,40 @@ function Test-Throws([string]$Name, [scriptblock]$Action, [string]$Pattern) {
     }
 }
 
-Test-Equal 'Valid Program Files path' 'C:\Program Files\Desk Pet Framework\desk-pet-framework.exe' (Join-NativeFileSystemPath 'C:\Program Files\Desk Pet Framework' 'desk-pet-framework.exe')
-Test-Equal 'Trailing backslash' 'C:\Program Files\Desk Pet Framework\desk-pet-framework.exe' (Join-NativeFileSystemPath 'C:\Program Files\Desk Pet Framework\' 'desk-pet-framework.exe')
-Test-Equal 'Quoted path' 'C:\Program Files\Desk Pet Framework\desk-pet-framework.exe' (Join-NativeFileSystemPath '"C:\Program Files\Desk Pet Framework"' 'desk-pet-framework.exe')
-Test-Equal 'Chinese and spaces' 'C:\桌宠 测试\Desk Pet Framework\desk-pet-framework.exe' (Join-NativeFileSystemPath 'C:\桌宠 测试\Desk Pet Framework' 'desk-pet-framework.exe')
-Test-Throws 'Empty InstallLocation' { Join-NativeFileSystemPath '' 'desk-pet-framework.exe' } 'InstallLocation is empty'
-Test-Throws 'Relative InstallLocation' { Join-NativeFileSystemPath '.\Desk Pet Framework' 'desk-pet-framework.exe' } 'not an absolute path'
+$programFilesPath = [System.IO.Path]::Combine('C:\Program Files', $script:ProductName)
+$chinesePrefix = -join @([char]0x684C,[char]0x5BA0,' ',[char]0x6D4B,[char]0x8BD5)
+$chinesePath = [System.IO.Path]::Combine('C:\' + $chinesePrefix, $script:ProductName)
+Test-Equal 'Valid Program Files path' ([System.IO.Path]::Combine($programFilesPath, $script:ExecutableName)) (Join-NativeFileSystemPath $programFilesPath $script:ExecutableName)
+Test-Equal 'Trailing backslash' ([System.IO.Path]::Combine($programFilesPath, $script:ExecutableName)) (Join-NativeFileSystemPath ($programFilesPath + '\') $script:ExecutableName)
+Test-Equal 'Quoted path' ([System.IO.Path]::Combine($programFilesPath, $script:ExecutableName)) (Join-NativeFileSystemPath ('"' + $programFilesPath + '"') $script:ExecutableName)
+Test-Equal 'Chinese and spaces' ([System.IO.Path]::Combine($chinesePath, $script:ExecutableName)) (Join-NativeFileSystemPath $chinesePath $script:ExecutableName)
+Test-Throws 'Empty InstallLocation' { Join-NativeFileSystemPath '' $script:ExecutableName } 'InstallLocation is empty'
+Test-Throws 'Relative InstallLocation' { Join-NativeFileSystemPath '.\Relative Product' $script:ExecutableName } 'not an absolute path'
 
-$directoryExists = { param($Path) $Path -eq 'C:\Valid\Desk Pet Framework' }
-$fileExists = { param($Path) $Path -eq 'C:\Valid\Desk Pet Framework\desk-pet-framework.exe' }
+$validDirectory = [System.IO.Path]::Combine('C:\Valid', $script:ProductName)
+$validExecutable = [System.IO.Path]::Combine($validDirectory, $script:ExecutableName)
+$directoryExists = { param($Path) $Path -eq $validDirectory }.GetNewClosure()
+$fileExists = { param($Path) $Path -eq $validExecutable }.GetNewClosure()
 $records = @(
-    [pscustomobject]@{ DisplayName='Desk Pet Framework'; DisplayVersion='0.1.0'; InstallLocation='Z:\Old Desk Pet'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\Old' },
-    [pscustomobject]@{ DisplayName='Desk Pet Framework'; DisplayVersion='0.1.0'; InstallLocation='C:\Valid\Desk Pet Framework\'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Valid' }
+    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion='0.1.0'; InstallLocation='Z:\Old Product'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\Old' },
+    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion='0.1.0'; InstallLocation=($validDirectory + '\'); PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Valid' }
 )
 $selection = Select-DeskPetInstallRecord -Records $records -ExpectedVersion '0.1.0' -DirectoryExists $directoryExists -FileExists $fileExists
-Test-Equal 'Second valid record selected after stale first record' 'C:\Valid\Desk Pet Framework\desk-pet-framework.exe' $selection.ExecutablePath
+Test-Equal 'Second valid record selected after stale first record' $validExecutable $selection.ExecutablePath
 Test-Equal 'Unavailable drive record marked unusable' $false $selection.Evaluations[0].Usable
 Test-Equal 'Current-user record preferred' $true $selection.Evaluation.CurrentUser
 
 $missingExecutable = Select-DeskPetInstallRecord -Records @([pscustomobject]@{
-    DisplayName='Desk Pet Framework'; DisplayVersion='0.1.0'; InstallLocation='C:\Installed'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\MissingExe'
+    DisplayName=$script:ProductName; DisplayVersion='0.1.0'; InstallLocation='C:\Installed'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\MissingExe'
 }) -ExpectedVersion '0.1.0' -DirectoryExists { $true } -FileExists { $false }
 Test-Equal 'Installed record without main executable fails selection' $null $missingExecutable.SelectedRecord
 
 $isolatedResult = & {
     function Get-PSDrive { return $null }
     if ($null -ne (Get-PSDrive -Name C -ErrorAction SilentlyContinue)) { throw 'The isolated PSDrive simulation failed.' }
-    Join-NativeFileSystemPath 'C:\Program Files\Desk Pet Framework' 'desk-pet-framework.exe'
+    Join-NativeFileSystemPath $programFilesPath $script:ExecutableName
 }
-Test-Equal 'Native combine is independent of a C PSDrive' 'C:\Program Files\Desk Pet Framework\desk-pet-framework.exe' ([string]$isolatedResult)
+Test-Equal 'Native combine is independent of a C PSDrive' ([System.IO.Path]::Combine($programFilesPath, $script:ExecutableName)) ([string]$isolatedResult)
 
 $reportRoot = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'desk-pet-qa-report-test-' + [guid]::NewGuid().ToString('N'))
 try {

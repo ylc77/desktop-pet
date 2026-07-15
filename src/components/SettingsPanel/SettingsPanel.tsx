@@ -12,7 +12,7 @@ export function SettingsPanel({ character, settings, onPatch, onClose }: Props) 
   const skins = character.manifest.skins ?? { default: { name: "默认" } };
   return (
     <aside className="settings-panel">
-      <header><strong>桌宠设置</strong><button onClick={onClose} aria-label="关闭设置">×</button></header>
+      <header><strong>七酱桌宠设置</strong><button onClick={onClose} aria-label="关闭设置">×</button></header>
       <fieldset className="settings-grid">
         <label><input type="checkbox" checked={settings.interactionsEnabled} onChange={(event) => onPatch({ interactionsEnabled: event.currentTarget.checked })} /> 启用互动</label>
         <label><input type="checkbox" checked={settings.alwaysOnTop} onChange={(event) => onPatch({ alwaysOnTop: event.currentTarget.checked })} /> 始终置顶</label>

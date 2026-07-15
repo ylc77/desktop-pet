@@ -1,14 +1,14 @@
 # 安装说明
 
-当前内部候选安装包为 `Desk Pet Framework_0.1.0_x64-setup.exe`。正式 `beta.1` 尚未生成。
+当前版本化内部安装包为 `七酱桌宠_0.1.0_x64-setup.exe`，对外文件名为 `七酱桌宠.exe`。正式 `beta.1` 尚未生成。
 
 1. 确认系统为 Windows 10/11 x64，并准备联网环境以便缺失时下载 WebView2。
 2. 从可信渠道取得安装包和 `SHA256SUMS.txt`。
 3. 在 PowerShell 中核对：
 
 ```powershell
-Get-FileHash '.\Desk Pet Framework_0.1.0_x64-setup.exe' -Algorithm SHA256
-Get-AuthenticodeSignature '.\Desk Pet Framework_0.1.0_x64-setup.exe'
+Get-FileHash '.\七酱桌宠.exe' -Algorithm SHA256
+Get-AuthenticodeSignature '.\七酱桌宠.exe'
 ```
 
 4. 只有哈希与发布清单一致时才运行安装包。

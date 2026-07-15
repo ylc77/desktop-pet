@@ -116,7 +116,7 @@ foreach ($requirement in $requirements) {
     $evaluated += [pscustomobject]@{ id=$requirement.id; title=$requirement.title; status=$status; evidence=@($evidence) }
 }
 
-$releaseInstaller = Get-ChildItem -LiteralPath ([System.IO.Path]::Combine($repo, 'release')) -Filter '*setup.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+$releaseInstaller = Get-DeskPetReleaseInstaller -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release'))
 $signatureStatus = if ($releaseInstaller) { [string](Get-AuthenticodeSignature -FilePath $releaseInstaller.FullName).Status } else { 'InstallerMissing' }
 $failedRequired = @($evaluated | Where-Object status -eq 'failed')
 $pendingRequired = @($evaluated | Where-Object status -ne 'passed')

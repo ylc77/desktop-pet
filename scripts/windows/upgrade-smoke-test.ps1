@@ -41,12 +41,14 @@ function Invoke-Installer([string]$Path) {
 try {
     $state.phase = 'install-previous'
     Invoke-Installer $previous
-    $oldRecords = @(Get-DeskPetInstallRecords)
+    $oldRecords = @(Get-DeskPetInstallRecords -IncludeLegacy)
     if ($oldRecords.Count -ne 1) { throw "Expected one previous-version install record; found $($oldRecords.Count)." }
     $oldVersion = [string](Get-ObjectPropertyValue $oldRecords[0] 'DisplayVersion')
     $currentVersion = Get-DeskPetReleaseVersion -RepositoryRoot $repo
     if ($oldVersion -eq $currentVersion) { throw "Installed previous version is $oldVersion, the same as the current Release. Same-version reinstall is not an upgrade test." }
-    $oldExe = Join-NativeFileSystemPath ([string](Get-ObjectPropertyValue $oldRecords[0] 'InstallLocation')) 'desk-pet-framework.exe'
+    $oldDisplayName = [string](Get-ObjectPropertyValue $oldRecords[0] 'DisplayName')
+    $oldExecutableName = if ($oldDisplayName -eq $script:ProductName) { $script:ExecutableName } else { [string]$script:LegacyExecutableNames[0] }
+    $oldExe = Join-NativeFileSystemPath ([string](Get-ObjectPropertyValue $oldRecords[0] 'InstallLocation')) $oldExecutableName
     if (-not [System.IO.File]::Exists($oldExe)) { throw 'Previous-version executable was not found.' }
     Start-Process -FilePath $oldExe
     Write-Host 'Set non-sensitive window position, scale, always-on-top, and autostart values in the old version. Exit normally, then press Enter.'
@@ -58,7 +60,7 @@ try {
 
     $state.phase = 'install-current-over-previous'
     Invoke-Installer $current
-    $records = @(Get-DeskPetInstallRecords)
+    $records = @(Get-DeskPetInstallRecords -IncludeLegacy)
     $selection = Select-DeskPetInstallRecord -Records $records -ExpectedVersion $currentVersion
     $afterSettingsHash = if ([System.IO.File]::Exists($settingsPath)) { (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash } else { $null }
     $afterAutostart = @(Get-DeskPetRunEntries)

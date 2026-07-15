@@ -11,6 +11,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
+. "$PSScriptRoot\common.ps1"
 $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
 $results = @()
 Write-Warning 'This test installs and uninstalls the app once per listed path. Program Files may trigger UAC; do not bypass it.'
@@ -24,7 +25,7 @@ foreach ($installPath in $InstallPaths) {
         continue
     }
     & "$PSScriptRoot\install-smoke-test.ps1" -InstallerPath $installer -InstallerArguments @('/S', "/D=$installPath") -Confirm:$false
-    $exe = Join-Path $installPath 'desk-pet-framework.exe'
+    $exe = Join-Path $installPath $script:ExecutableName
     & "$PSScriptRoot\process-smoke-test.ps1" -ExecutablePath $exe -ManualExitTimeoutSeconds 120 -Confirm:$false
     $config = Join-Path $env:APPDATA "$script:AppIdentifier\settings.json"
     $logs = Join-Path $env:LOCALAPPDATA $script:AppIdentifier

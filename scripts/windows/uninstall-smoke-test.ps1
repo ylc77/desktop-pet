@@ -9,7 +9,7 @@ $expectedVersion = Get-DeskPetReleaseVersion -RepositoryRoot $repo
 
 $records = @(Get-DeskPetInstallRecords)
 if ($records.Count -eq 0 -and $WhatIfPreference) { Write-Host 'No installed application record; uninstall preview has no action.'; exit 0 }
-if (Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue) { throw 'Application is running. Exit through the tray before uninstalling.' }
+if (Get-DeskPetRunningProcesses -IncludeLegacy) { throw 'Application is running. Exit through the tray before uninstalling.' }
 $selection = Select-DeskPetUninstallRecord -Records $records -ExpectedVersion $expectedVersion
 if (-not $selection.SelectedRecord) {
     $details = @($selection.Evaluations | ForEach-Object { "display=$($_.DisplayName); version=$($_.DisplayVersion); reasons=$($_.Reasons -join ' ')" }) -join ' | '
@@ -31,12 +31,11 @@ if ($command.ArgumentList.Count -gt 0) { $startParameters.ArgumentList = $comman
 $process = Start-Process @startParameters
 if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { throw "Uninstaller timed out after $TimeoutSeconds seconds." }
 if ($process.ExitCode -ne 0) { throw "Uninstaller exited with code $($process.ExitCode)." }
-$remaining = @(Get-DeskPetInstallRecords)
-$running = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue)
-$autostart = @(Get-DeskPetRunEntries)
+$remaining = @(Get-DeskPetInstallRecords -IncludeLegacy)
+$running = @(Get-DeskPetRunningProcesses -IncludeLegacy)
+$autostart = @(Get-DeskPetRunEntries -IncludeLegacy)
 $dataDirectory = Join-Path $env:APPDATA $script:AppIdentifier
-$startMenuRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-$startMenuMatches = @(Get-ChildItem -LiteralPath $startMenuRoot -Filter '*Desk Pet*' -Recurse -ErrorAction SilentlyContinue)
+$startMenuMatches = @(Get-DeskPetStartMenuEntries -IncludeLegacy)
 $results = @(
     Write-SmokeResult 'Uninstall registry removed' ($remaining.Count -eq 0) "remaining=$($remaining.Count)"
     Write-SmokeResult 'No remaining process' ($running.Count -eq 0) "remaining=$($running.Count)"

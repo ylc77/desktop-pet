@@ -5,11 +5,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 
-$installs = @(Get-DeskPetInstallRecords)
-$autostart = @(Get-DeskPetRunEntries)
-$processes = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue)
+$installs = @(Get-DeskPetInstallRecords -IncludeLegacy)
+$autostart = @(Get-DeskPetRunEntries -IncludeLegacy)
+$processes = @(Get-DeskPetRunningProcesses -IncludeLegacy)
 $dataDirectory = Join-Path $env:LOCALAPPDATA $script:AppIdentifier
-$startMenuMatches = @(Get-ChildItem (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') -Filter '*Desk Pet*' -Recurse -ErrorAction SilentlyContinue)
+$startMenuMatches = @(Get-DeskPetStartMenuEntries -IncludeLegacy)
 
 $results = @(
     Write-SmokeResult 'No installed application record' ($installs.Count -eq 0) "count=$($installs.Count)"

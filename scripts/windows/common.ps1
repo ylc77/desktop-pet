@@ -1,8 +1,19 @@
 Set-StrictMode -Version Latest
 
-$script:ProductName = 'Desk Pet Framework'
-$script:ProcessName = 'desk-pet-framework'
-$script:AppIdentifier = 'dev.deskpet.framework'
+$script:RepositoryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
+$script:TauriConfigPath = [System.IO.Path]::Combine($script:RepositoryRoot, 'src-tauri', 'tauri.conf.json')
+if (-not [System.IO.File]::Exists($script:TauriConfigPath)) { throw "Tauri configuration not found: $script:TauriConfigPath" }
+$script:TauriConfig = Get-Content -LiteralPath $script:TauriConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$script:ProductName = [string]$script:TauriConfig.productName
+$script:MainBinaryName = [string]$script:TauriConfig.mainBinaryName
+$script:ExecutableName = "$script:MainBinaryName.exe"
+$script:ProcessName = $script:MainBinaryName
+$script:AppIdentifier = [string]$script:TauriConfig.identifier
+$script:PublicInstallerName = "$script:ProductName.exe"
+# Compatibility-only identifiers for detecting leftovers from pre-rebrand installations.
+$script:LegacyProductNames = @('Desk Pet Framework')
+$script:LegacyExecutableNames = @('desk-pet-framework.exe')
+$script:LegacyProcessNames = @('desk-pet-framework')
 
 function ConvertTo-NormalizedProcessorArchitecture {
     param([AllowNull()][string]$Architecture)
@@ -102,11 +113,38 @@ function Get-DeskPetReleaseVersion {
     return [string](Get-ObjectPropertyValue -InputObject $config -Name 'version')
 }
 
+function Get-DeskPetReleaseInstaller {
+    param(
+        [string]$ReleaseDirectory = [System.IO.Path]::Combine($script:RepositoryRoot, 'release')
+    )
+    if (-not [System.IO.Directory]::Exists($ReleaseDirectory)) { return $null }
+
+    $manifestPath = [System.IO.Path]::Combine($ReleaseDirectory, 'release-manifest.json')
+    if ([System.IO.File]::Exists($manifestPath)) {
+        try {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $versionedFile = [string](Get-ObjectPropertyValue -InputObject $manifest -Name 'versionedInstallerFile')
+            if (-not [string]::IsNullOrWhiteSpace($versionedFile)) {
+                $manifestInstaller = [System.IO.Path]::Combine($ReleaseDirectory, $versionedFile)
+                if ([System.IO.File]::Exists($manifestInstaller)) { return Get-Item -LiteralPath $manifestInstaller }
+            }
+        } catch {
+            Write-Warning 'The release manifest could not be read; falling back to a branded installer filename match.'
+        }
+    }
+
+    $prefix = "$script:ProductName`_"
+    return Get-ChildItem -LiteralPath $ReleaseDirectory -Filter '*-setup.exe' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) } |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+}
+
 function Select-DeskPetInstallRecord {
     param(
         [AllowEmptyCollection()][object[]]$Records = @(),
         [Parameter(Mandatory)][string]$ExpectedVersion,
-        [string]$ExecutableName = 'desk-pet-framework.exe',
+        [string]$ExecutableName = $script:ExecutableName,
         [scriptblock]$DirectoryExists = { param($Path) [System.IO.Directory]::Exists($Path) },
         [scriptblock]$FileExists = { param($Path) [System.IO.File]::Exists($Path) }
     )
@@ -277,6 +315,9 @@ function Write-QAResultArtifacts {
 }
 
 function Get-DeskPetInstallRecords {
+    param([switch]$IncludeLegacy)
+    $displayNames = @($script:ProductName)
+    if ($IncludeLegacy) { $displayNames += @($script:LegacyProductNames) }
     $roots = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -284,11 +325,26 @@ function Get-DeskPetInstallRecords {
     )
     foreach ($root in $roots) {
         Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
-            Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq $script:ProductName }
+            Where-Object { $_.PSObject.Properties['DisplayName'] -and $displayNames -contains [string]$_.DisplayName }
     }
 }
 
+function Test-DeskPetRunEntryMatch {
+    param(
+        [AllowEmptyString()][string]$Name,
+        [AllowEmptyString()][string]$Value,
+        [switch]$IncludeLegacy
+    )
+    $names = @($script:ProductName, $script:ExecutableName, $script:ProcessName)
+    if ($IncludeLegacy) { $names += @($script:LegacyProductNames) + @($script:LegacyExecutableNames) + @($script:LegacyProcessNames) }
+    return @($names | Where-Object {
+        $Name.IndexOf([string]$_, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $Value.IndexOf([string]$_, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    }).Count -gt 0
+}
+
 function Get-DeskPetRunEntries {
+    param([switch]$IncludeLegacy)
     $runKeys = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
         'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
@@ -300,10 +356,35 @@ function Get-DeskPetRunEntries {
         foreach ($property in $item.PSObject.Properties) {
             if ($property.Name -like 'PS*') { continue }
             $value = [string]$property.Value
-            if ($property.Name -match 'desk.?pet' -or $value -match 'desk-pet-framework|Desk Pet Framework') {
+            if (Test-DeskPetRunEntryMatch -Name $property.Name -Value $value -IncludeLegacy:$IncludeLegacy) {
                 [pscustomobject]@{ Key = $key; Name = $property.Name; Value = $value }
             }
         }
+    }
+}
+
+function Get-DeskPetStartMenuEntries {
+    param([switch]$IncludeLegacy)
+    $names = @($script:ProductName)
+    if ($IncludeLegacy) { $names += @($script:LegacyProductNames) }
+    $roots = @(
+        [System.IO.Path]::Combine($env:APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+        [Environment]::GetFolderPath('CommonStartMenu')
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) -and [System.IO.Directory]::Exists([string]$_) }
+    foreach ($root in $roots) {
+        Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+            $entryName = $_.Name
+            @($names | Where-Object { $entryName.IndexOf([string]$_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0
+        }
+    }
+}
+
+function Get-DeskPetRunningProcesses {
+    param([switch]$IncludeLegacy)
+    $processNames = @($script:ProcessName)
+    if ($IncludeLegacy) { $processNames += @($script:LegacyProcessNames) }
+    foreach ($processName in $processNames | Select-Object -Unique) {
+        Get-Process -Name $processName -ErrorAction SilentlyContinue
     }
 }
 

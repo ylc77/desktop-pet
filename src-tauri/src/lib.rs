@@ -683,7 +683,7 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let reload = MenuItem::with_id(app, "reload", "重新加载角色资源", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset", "恢复默认位置", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "临时隐藏", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出七酱桌宠", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
@@ -695,7 +695,7 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("桌宠框架")
+        .tooltip("七酱桌宠")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "quit" => app.exit(0),
@@ -777,5 +777,5 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("failed to run desktop pet framework");
+        .expect("failed to run 七酱桌宠");
 }

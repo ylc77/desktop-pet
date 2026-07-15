@@ -7,12 +7,12 @@ New-Item -ItemType Directory -Path $ResultRoot -Force | Out-Null
 $env:DESK_PET_QA_CLEAN_ENVIRONMENT = '1'
 Start-Transcript -Path (Join-Path $ResultRoot 'sandbox-bootstrap.log') -Force
 try {
-    $installer = Get-ChildItem (Join-Path $InputRoot 'release') -Filter '*setup.exe' -File | Select-Object -First 1
+    . (Join-Path $InputRoot 'scripts\windows\common.ps1')
+    $installer = Get-DeskPetReleaseInstaller -ReleaseDirectory ([System.IO.Path]::Combine($InputRoot, 'release'))
     if (-not $installer) { throw 'No NSIS installer was found in the read-only input mapping.' }
     $webView = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
     [pscustomobject]@{ Installed=[bool]$webView; Version=$(if($webView){$webView.pv}else{$null}); CheckedAtUtc=[DateTime]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $ResultRoot 'webview2.json')
     & (Join-Path $InputRoot 'scripts\windows\install-smoke-test.ps1') -InstallerPath $installer.FullName -Confirm:$false
-    . (Join-Path $InputRoot 'scripts\windows\common.ps1')
     $selection = Select-DeskPetInstallRecord -Records @(Get-DeskPetInstallRecords) -ExpectedVersion (Get-DeskPetReleaseVersion -RepositoryRoot $InputRoot)
     if (-not $selection.SelectedRecord) { throw 'Installer completed, but no valid installed application record was found.' }
     $exe = [string]$selection.ExecutablePath

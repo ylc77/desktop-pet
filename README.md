@@ -1,6 +1,6 @@
-# Desk Pet Framework
+# 七酱桌宠
 
-一个离线优先、资源包驱动的 Windows 桌宠开发框架。技术栈为 Tauri 2、React、TypeScript、Rust 和 Vite。当前版本只实现桌宠运行内核，不包含 AI、账号、支付、提醒、云同步或其他业务模块。
+七酱桌宠是一个离线优先、资源包驱动的 Windows 桌宠应用，底层保留可扩展的通用桌宠框架。技术栈为 Tauri 2、React、TypeScript、Rust 和 Vite。当前版本只实现桌宠运行内核，不包含 AI、账号、支付、提醒、云同步或其他业务模块。
 
 ## 已实现
 
@@ -55,7 +55,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 npm run build:release
 ```
 
-安装程序输出位于 `src-tauri/target/release/bundle/nsis/`，文件名以 `-setup.exe` 结尾。
+版本化安装程序输出位于 `src-tauri/target/release/bundle/nsis/`，文件名以 `-setup.exe` 结尾；`release/七酱桌宠.exe` 是内容完全相同的对外文件。主程序文件名为 `desktop_pet.exe`。
 
 ## 添加角色
 

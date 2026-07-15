@@ -3,8 +3,8 @@
 当前 `0.1.0` NSIS 安装包未签名，`Get-AuthenticodeSignature` 返回 `NotSigned`。内部测试人员必须先使用发布目录中的 `SHA256SUMS.txt` 核对：
 
 ```powershell
-Get-FileHash '.\release\Desk Pet Framework_0.1.0_x64-setup.exe' -Algorithm SHA256
-Get-AuthenticodeSignature '.\release\Desk Pet Framework_0.1.0_x64-setup.exe'
+Get-FileHash '.\release\七酱桌宠.exe' -Algorithm SHA256
+Get-AuthenticodeSignature '.\release\七酱桌宠.exe'
 ```
 
 不要绕过 SmartScreen、杀毒软件或企业策略。本机未出现警告不代表其他电脑不会出现。

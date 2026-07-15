@@ -67,7 +67,7 @@ Safe 模式只执行非破坏性构建、测试、哈希、签名状态、清单
 )
 ```
 
-脚本创建忽略版本控制的 `release/` 目录，复制 NSIS 安装包并生成 `SHA256SUMS.txt` 和 `release-manifest.json`。清单只记录相对产物文件名，不包含用户名或绝对路径；Git commit 不可用时为 `null`，绝不伪造。
+脚本创建忽略版本控制的 `release/` 目录，保留版本化 NSIS 安装包，并额外生成内容相同的 `七酱桌宠.exe`。`SHA256SUMS.txt` 同时记录对外文件和版本化文件；`release-manifest.json` 记录两者文件名、大小、SHA-256、`desktop_pet.exe`、版本和 Git commit。脚本不会覆盖来源不明且哈希不同的同名对外文件。清单只记录相对产物文件名，不包含用户名或绝对路径；Git commit 不可用时为 `null`，绝不伪造。
 
 ## 已知 Rust 链接器提示
 

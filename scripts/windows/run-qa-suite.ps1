@@ -53,13 +53,12 @@ function Assert-QACommand([string]$Name, [string]$Command, [string]$Category = '
 }
 
 function Update-QATransactionState([System.Collections.IDictionary]$State) {
-    $finalRecords = @(Get-DeskPetInstallRecords)
+    $finalRecords = @(Get-DeskPetInstallRecords -IncludeLegacy)
     $State['uninstallRecordCount'] = $finalRecords.Count
     $State['installationDetected'] = [bool]$State['installationDetected'] -or $finalRecords.Count -gt 0
-    $State['processCount'] = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue).Count
-    $State['autostartEntryCount'] = @(Get-DeskPetRunEntries).Count
-    $startMenuRoot = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-    $State['startMenuEntryCount'] = @(Get-ChildItem -LiteralPath $startMenuRoot -Filter '*Desk Pet*' -Recurse -ErrorAction SilentlyContinue).Count
+    $State['processCount'] = @(Get-DeskPetRunningProcesses -IncludeLegacy).Count
+    $State['autostartEntryCount'] = @(Get-DeskPetRunEntries -IncludeLegacy).Count
+    $State['startMenuEntryCount'] = @(Get-DeskPetStartMenuEntries -IncludeLegacy).Count
     $State['installRecords'] = @($finalRecords | ForEach-Object {
         $rawLocation = [string](Get-ObjectPropertyValue $_ 'InstallLocation')
         $directoryExists = $false
@@ -163,7 +162,7 @@ try {
             Add-Result 'Install lifecycle' 'manual' 'skipped' '' 'Skipped by -SkipInstall.'
         } elseif ($PSCmdlet.ShouldProcess('Current Windows user profile', ($actions -join '; '))) {
             $currentPhase = 'installer-selection'
-            $installer = if ($InstallerPath) { Get-Item -LiteralPath (Resolve-Path -LiteralPath $InstallerPath).Path } else { Get-ChildItem (Join-Path $repo 'release') -Filter '*setup.exe' -File | Select-Object -First 1 }
+            $installer = if ($InstallerPath) { Get-Item -LiteralPath (Resolve-Path -LiteralPath $InstallerPath).Path } else { Get-DeskPetReleaseInstaller -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) }
             if (-not $installer) { throw 'No current NSIS installer was found.' }
             $currentPhase = 'installation'
             Assert-QACommand 'Install application' "& .\scripts\windows\install-smoke-test.ps1 -InstallerPath '$($installer.FullName.Replace("'", "''"))' -Confirm:`$false"

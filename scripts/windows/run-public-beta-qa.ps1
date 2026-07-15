@@ -23,7 +23,7 @@ if ($SkipPerformance) { $command += ' -SkipPerformance' }
 $hostFacts = Get-PublicBetaHostFacts
 
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
-    $candidate = Get-ChildItem -LiteralPath ([System.IO.Path]::Combine($repo, 'release')) -Filter '*setup.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    $candidate = Get-DeskPetReleaseInstaller -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release'))
     if ($candidate) { $InstallerPath = $candidate.FullName }
 }
 function Save-EnvironmentResult([string]$EnvironmentId, [string]$Status, [object[]]$Checks, [string[]]$Notes) {
@@ -200,7 +200,7 @@ if ($Mode -eq 'Performance') {
         Write-Host "Would capture 15 minutes to $performance. This preview does not claim an eight-hour pass."
         exit 0
     }
-    if (-not $PSCmdlet.ShouldProcess('Current desk-pet-framework process', 'Capture 15 minutes of performance data')) { exit 0 }
+    if (-not $PSCmdlet.ShouldProcess("Current $script:ProcessName process", 'Capture 15 minutes of performance data')) { exit 0 }
     [System.IO.Directory]::CreateDirectory($performance) | Out-Null
     $csv = [System.IO.Path]::Combine($performance, 'performance.csv')
     $exitCode = 1
