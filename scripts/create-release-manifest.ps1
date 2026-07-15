@@ -9,9 +9,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $installer = Get-Item -LiteralPath $InstallerPath
-$package = Get-Content -Raw -LiteralPath (Join-Path $repo 'package.json') | ConvertFrom-Json
-$tauri = Get-Content -Raw -LiteralPath (Join-Path $repo 'src-tauri\tauri.conf.json') | ConvertFrom-Json
-$character = Get-Content -Raw -LiteralPath (Join-Path $repo 'public\characters\_placeholder\manifest.json') | ConvertFrom-Json
+$package = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repo 'package.json') | ConvertFrom-Json
+$tauri = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repo 'src-tauri\tauri.conf.json') | ConvertFrom-Json
+$character = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repo 'public\characters\_placeholder\manifest.json') | ConvertFrom-Json
 $hash = Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256
 $commit = (& git -C $repo rev-parse HEAD 2>$null)
 $dirty = [bool](& git -C $repo status --porcelain --untracked-files=no)
