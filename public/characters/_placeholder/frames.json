@@ -1,0 +1,46 @@
+{
+  "animations": {
+    "idle": [
+      "animations/idle/idle_0001.png",
+      "animations/idle/idle_0002.png",
+      "animations/idle/idle_0003.png"
+    ],
+    "blink": [
+      "animations/blink/blink_0001.png",
+      "animations/blink/blink_0002.png",
+      "animations/blink/blink_0003.png"
+    ],
+    "walk": [
+      "animations/walk/walk_0001.png",
+      "animations/walk/walk_0002.png",
+      "animations/walk/walk_0003.png",
+      "animations/walk/walk_0004.png"
+    ],
+    "sleep": [
+      "animations/sleep/sleep_0001.png",
+      "animations/sleep/sleep_0002.png",
+      "animations/sleep/sleep_0003.png"
+    ],
+    "click": [
+      "animations/click/click_0001.png",
+      "animations/click/click_0002.png",
+      "animations/click/click_0003.png",
+      "animations/click/click_0004.png"
+    ],
+    "drag": [
+      "animations/drag/drag_0001.png"
+    ],
+    "land": [
+      "animations/land/land_0001.png",
+      "animations/land/land_0002.png",
+      "animations/land/land_0003.png"
+    ],
+    "happy": [
+      "animations/happy/happy_0001.png",
+      "animations/happy/happy_0002.png",
+      "animations/happy/happy_0003.png",
+      "animations/happy/happy_0004.png",
+      "animations/happy/happy_0005.png"
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+:root { font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; color: #f7f8fb; background: transparent; --pet-opacity: 1; }
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; user-select: none; }
+button, input, select { font: inherit; }
+button { color: inherit; }
+.loading, .fatal-error { position: absolute; inset: 20px; display: grid; place-content: center; gap: 8px; padding: 18px; border-radius: 16px; background: rgba(18, 22, 31, .9); text-align: center; }
+.pet-stage { position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: center; touch-action: none; pointer-events: none; }
+.pet-transform { position: relative; flex: 0 0 auto; transition: transform 120ms ease, opacity 120ms ease; pointer-events: none; }
+.pet-frame { width: 100%; height: 100%; object-fit: contain; image-rendering: auto; pointer-events: none; filter: drop-shadow(0 4px 5px rgba(0,0,0,.26)); }
+.pet-hit-area { position: absolute; z-index: 2; pointer-events: auto; cursor: grab; touch-action: none; }
+.pet-hit-area:active { cursor: grabbing; }
+.pet-hit-area.debug-visible { outline: 2px dashed #ffb84f; background: rgba(255,184,79,.09); }
+.anchor-x, .anchor-y { position: absolute; z-index: 3; pointer-events: none; background: rgba(94,229,255,.9); }
+.anchor-x { top: 0; bottom: 0; width: 1px; }
+.anchor-y { left: 0; right: 0; height: 1px; }
+.menu-backdrop { position: fixed; inset: 0; z-index: 20; }
+.context-menu { position: absolute; box-sizing: border-box; width: 205px; padding: 8px; display: grid; gap: 5px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid rgba(255,255,255,.12); border-radius: 12px; background: rgba(22, 26, 36, .96); box-shadow: 0 12px 32px rgba(0,0,0,.38); backdrop-filter: blur(16px); }
+.context-menu button, .context-menu label { min-height: 30px; padding: 6px 9px; border: 0; border-radius: 7px; background: rgba(255,255,255,.06); text-align: left; }
+.context-menu button:hover { background: rgba(120,145,255,.26); }
+.context-menu label { display: grid; gap: 4px; }
+.context-menu select { width: 100%; }
+.context-menu .danger { color: #ff9b9b; }
+.developer-panel, .settings-panel { position: absolute; z-index: 10; top: 8px; right: 8px; width: min(310px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow: auto; padding: 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 13px; background: rgba(16, 20, 29, .92); box-shadow: 0 12px 30px rgba(0,0,0,.35); backdrop-filter: blur(14px); user-select: text; }
+.developer-panel header, .settings-panel header { display: flex; justify-content: space-between; align-items: center; }
+.developer-panel header button, .settings-panel header button { border: 0; background: transparent; font-size: 20px; }
+.developer-panel dl { display: grid; grid-template-columns: 78px 1fr; gap: 3px 8px; margin: 10px 0; font-size: 12px; }
+.developer-panel dt { color: #9ca9c4; }
+.developer-panel dd { margin: 0; overflow-wrap: anywhere; }
+.trigger-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.settings-grid { display: grid; gap: 5px; margin: 8px 0; padding: 8px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; font-size: 11px; }
+.settings-grid label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.settings-grid input[type="range"] { width: 110px; }
+.trigger-grid button { padding: 5px 2px; border: 0; border-radius: 5px; background: #35405c; font-size: 11px; }
+.debug-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 7px; }
+.debug-actions button { padding: 5px; border: 0; border-radius: 5px; background: #293249; font-size: 10px; }
+.warning-list { color: #ffd479; font-size: 10px; }
+.log-list { margin-top: 8px; max-height: 130px; overflow: auto; border-top: 1px solid rgba(255,255,255,.1); font-size: 10px; }
+.log-list p { margin: 5px 0; overflow-wrap: anywhere; }
+.log-warn { color: #ffd479; } .log-error { color: #ff9b9b; } .log-info { color: #9bc4ff; }

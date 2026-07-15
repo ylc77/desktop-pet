@@ -1,0 +1,41 @@
+import type { AppSettings } from "../../core/settings/settingsSchema";
+
+interface Props {
+  position: { x: number; y: number };
+  settings: AppSettings;
+  characters: { id: string; name: string }[];
+  developerToolsAllowed: boolean;
+  onPatch: (patch: Partial<AppSettings>) => void;
+  onAction: (action: "reload" | "reset" | "hide" | "quit" | "settings" | "developer") => void;
+  onClose: () => void;
+}
+
+export function ContextMenu({ position, settings, characters, developerToolsAllowed, onPatch, onAction, onClose }: Props) {
+  const viewportPadding = 8;
+  const left = Math.max(viewportPadding, Math.min(position.x, window.innerWidth - 205 - viewportPadding));
+  const top = Math.max(viewportPadding, Math.min(position.y, window.innerHeight - 390));
+
+  return (
+    <div className="menu-backdrop" onPointerDown={onClose} onContextMenu={(event) => event.preventDefault()}>
+      <section
+        className="context-menu"
+        style={{ left, top, maxHeight: window.innerHeight - top - viewportPadding }}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <button onClick={() => onPatch({ animationsPaused: !settings.animationsPaused })}>{settings.animationsPaused ? "继续动画" : "暂停动画"}</button>
+        <label>大小 <input type="range" min="0.35" max="2" step="0.05" value={settings.scale} onChange={(e) => onPatch({ scale: e.currentTarget.valueAsNumber })} /></label>
+        <label>透明度 <input type="range" min="0.2" max="1" step="0.05" value={settings.opacity} onChange={(e) => onPatch({ opacity: e.currentTarget.valueAsNumber })} /></label>
+        <label>角色 <select value={settings.characterId} onChange={(e) => onPatch({ characterId: e.currentTarget.value })}>{characters.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <button onClick={() => onPatch({ alwaysOnTop: !settings.alwaysOnTop })}>{settings.alwaysOnTop ? "关闭置顶" : "开启置顶"}</button>
+        <button onClick={() => onPatch({ autostart: !settings.autostart })}>{settings.autostart ? "关闭开机启动" : "开启开机启动"}</button>
+        <button onClick={() => onPatch({ facing: settings.facing === "left" ? "right" : "left" })}>朝向：{settings.facing === "left" ? "左" : "右"}</button>
+        <button onClick={() => onAction("settings")}>设置</button>
+        {developerToolsAllowed && <button onClick={() => onAction("developer")}>开发者面板</button>}
+        <button onClick={() => onAction("reload")}>重新加载角色资源</button>
+        <button onClick={() => onAction("reset")}>恢复默认位置</button>
+        <button onClick={() => onAction("hide")}>临时隐藏</button>
+        <button className="danger" onClick={() => onAction("quit")}>退出</button>
+      </section>
+    </div>
+  );
+}
