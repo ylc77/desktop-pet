@@ -37,6 +37,10 @@
     "createUpdaterArtifacts": false,
     "icon": ["icons/icon.png"],
     "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,
@@ -45,4 +49,3 @@
     }
   }
 }
-

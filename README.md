@@ -83,3 +83,44 @@ npm run build:release
 核心运行不发起任何网络请求。设置保存在 Tauri 应用数据目录的 `settings.json`；浏览器预览使用 `localStorage` 回退。角色资源随安装包本地分发。
 
 开机启动由 Tauri 插件使用当前安装后的可执行文件路径注册；应用每次启动都会按保存的设置刷新注册信息。覆盖安装升级仍需按 Windows QA 清单验证。
+
+## Windows 开发环境准备
+
+开发和打包机需要安装：
+
+- Node.js 22 或更高版本，以及 npm。
+- Rustup、stable MSVC Rust toolchain（`x86_64-pc-windows-msvc`）。
+- Visual Studio Build Tools，勾选“使用 C++ 的桌面开发”。
+- Windows 10/11 SDK。
+- Microsoft Edge WebView2 Runtime。
+
+Rustup 默认把 Cargo 安装到 `%USERPROFILE%\.cargo\bin`。该目录必须位于用户 `PATH` 中；修改 PATH 后应关闭旧终端并打开新终端。项目脚本不依赖某个用户名的绝对 Cargo 路径。
+
+只读环境诊断：
+
+```powershell
+npm run check:windows-env
+```
+
+诊断脚本检查 Node、npm、Rust、Cargo、Rustup、MSVC、Windows SDK、WebView2、系统架构和必要环境变量，不会修改系统 PATH、注册表或安装组件。`npm run build:release` 会在构建开始前检查这些命令；Cargo 缺失时立即给出明确错误。
+
+## WebView2 安装策略
+
+NSIS 明确使用 Tauri 的 `downloadBootstrapper` 模式并静默运行 WebView2 bootstrapper。目标电脑已有 Evergreen WebView2 Runtime 时不会重复安装；缺失时安装过程需要联网下载 Runtime。离线且未预装 WebView2 的电脑不能依靠当前小体积安装包完成安装，应先由管理员部署官方 Evergreen Offline Installer，再运行桌宠安装包。
+
+WebView2 下载或安装失败必须视为安装失败，不能把“程序文件已复制但应用不能启动”标记为成功。干净 Windows 10/11、断网、代理和受限企业网络场景仍需按照 `docs/WINDOWS_QA.md` 人工验证。当前没有把约 127 MiB 的完整离线 Runtime 打入安装包。
+
+## 本地数据和日志
+
+- 设置：`%APPDATA%\dev.deskpet.framework\settings.json`。
+- 设置备份：同目录下的 `settings.backup.json`；损坏文件会重命名为 `settings.corrupt-<时间戳>.json`。
+- 日志：`%LOCALAPPDATA%\dev.deskpet.framework\logs\`，单文件上限 1 MiB，最多保留 5 个轮转文件。
+- 角色资源：随应用前端资源一起打包，不从用户目录或在线服务下载。
+- 缓存：应用没有自定义持久图片缓存；WebView2 自身缓存由 Runtime 管理。
+- 崩溃信息：项目不上传崩溃报告；可使用本地日志和 Windows Error Reporting 进行诊断。
+
+设置写入使用同目录临时文件、刷新磁盘后原子替换，并在覆盖前保存上一版本。单实例锁和原生写入互斥锁防止两个进程同时写设置。NSIS 卸载默认不擅自删除用户设置；需要彻底清除时，应先退出应用，再仅删除上述两个 `dev.deskpet.framework` 应用数据目录。
+
+## 发布工程
+
+发布流程、安装烟测、已知链接器提示和发布清单格式见 [docs/RELEASE.md](docs/RELEASE.md)。长期资源监控流程见 [docs/PERFORMANCE_TEST.md](docs/PERFORMANCE_TEST.md)。

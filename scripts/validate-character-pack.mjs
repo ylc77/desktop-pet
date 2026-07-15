@@ -88,7 +88,20 @@ for (const entry of characterEntries) {
   console.log(`✓ ${manifest.id}: ${Object.keys(frameIndex.animations).length} 个动作`);
 }
 
-await writeFile(path.join(root, "index.json"), JSON.stringify({ generatedAt: new Date().toISOString(), characters: index }, null, 2) + "\n");
+const indexPath = path.join(root, "index.json");
+let currentIndex = null;
+try {
+  currentIndex = JSON.parse(await readFile(indexPath, "utf8"));
+} catch {
+  // A missing or malformed generated index is replaced after validation succeeds.
+}
+
+if (JSON.stringify(currentIndex?.characters) !== JSON.stringify(index)) {
+  await writeFile(
+    indexPath,
+    JSON.stringify({ generatedAt: new Date().toISOString(), characters: index }, null, 2) + "\n",
+  );
+}
 console.log(`发现 ${index.length} 个角色。`);
 for (const warning of warnings) console.warn(`警告: ${warning}`);
 if (errors.length) { for (const error of errors) console.error(`错误: ${error}`); process.exitCode = 1; }

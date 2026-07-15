@@ -1,0 +1,3 @@
+warning: linker stdout: 正在创建库 <project>\src-tauri\target\debug\deps\desk_pet_framework_lib.dll.lib 和对象 <project>\src-tauri\target\debug\deps\desk_pet_framework_lib.dll.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default

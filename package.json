@@ -8,18 +8,19 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "build": "npm run validate:characters && tsc -b && vite build",
-    "build:release": "npm run validate && tauri build --bundles nsis",
+    "build:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "validate": "npm run typecheck && npm run test && npm run validate:characters && npm run build",
     "validate:characters": "node scripts/validate-character-pack.mjs",
-    "generate:placeholder": "node scripts/generate-placeholder.mjs"
+    "generate:placeholder": "node scripts/generate-placeholder.mjs",
+    "check:windows-env": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-windows-env.ps1",
+    "release:manifest": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-release-manifest.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-log": "^2.9.0",
-    "@tauri-apps/plugin-store": "^2.4.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "zod": "^4.1.5"
@@ -40,4 +41,3 @@
     "vitest": "^3.2.4"
   }
 }
-
