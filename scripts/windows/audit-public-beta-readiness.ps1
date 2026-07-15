@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ResultsRoot = (Join-Path $PSScriptRoot '..\..\qa-results\public-beta'),
+    [string]$ResultsRoot,
     [string]$OutputDirectory,
     [switch]$AcceptUnsignedRisk,
     [switch]$SkipLegacyDiscovery
@@ -10,6 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
+if ([string]::IsNullOrWhiteSpace($ResultsRoot)) { $ResultsRoot = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta') }
 $root = [System.IO.Path]::GetFullPath($ResultsRoot)
 $output = if ($OutputDirectory) { [System.IO.Path]::GetFullPath($OutputDirectory) } else { $root }
 [System.IO.Directory]::CreateDirectory($output) | Out-Null

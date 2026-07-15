@@ -31,17 +31,17 @@ if ($command.ArgumentList.Count -gt 0) { $startParameters.ArgumentList = $comman
 $process = Start-Process @startParameters
 if (-not $process.WaitForExit($TimeoutSeconds * 1000)) { throw "Uninstaller timed out after $TimeoutSeconds seconds." }
 if ($process.ExitCode -ne 0) { throw "Uninstaller exited with code $($process.ExitCode)." }
-$remaining = @(Get-DeskPetInstallRecords -IncludeLegacy)
-$running = @(Get-DeskPetRunningProcesses -IncludeLegacy)
-$autostart = @(Get-DeskPetRunEntries -IncludeLegacy)
+$cleanup = Wait-DeskPetUninstallCleanup -InstallLocation $installLocation -TimeoutSeconds 60 -PollIntervalMilliseconds 500
+$cleanupState = $cleanup.State
+Write-Host ("Uninstall cleanup completed={0}; timedOut={1}; elapsedMilliseconds={2}; attempts={3}" -f $cleanup.Complete, $cleanup.TimedOut, $cleanup.ElapsedMilliseconds, $cleanup.Attempts)
 $dataDirectory = Join-Path $env:APPDATA $script:AppIdentifier
-$startMenuMatches = @(Get-DeskPetStartMenuEntries -IncludeLegacy)
 $results = @(
-    Write-SmokeResult 'Uninstall registry removed' ($remaining.Count -eq 0) "remaining=$($remaining.Count)"
-    Write-SmokeResult 'No remaining process' ($running.Count -eq 0) "remaining=$($running.Count)"
-    Write-SmokeResult 'Program directory removed' (-not $installLocation -or -not [System.IO.Directory]::Exists($installLocation)) $(if ($installLocation) { ConvertTo-RedactedNativePath $installLocation } else { 'InstallLocation was empty or invalid.' })
-    Write-SmokeResult 'Autostart entry removed' ($autostart.Count -eq 0) "remaining=$($autostart.Count)"
-    Write-SmokeResult 'Start menu entries removed' ($startMenuMatches.Count -eq 0) "remaining=$($startMenuMatches.Count)"
+    Write-SmokeResult 'Cleanup completed within 60 seconds' $cleanup.Complete "elapsedMilliseconds=$($cleanup.ElapsedMilliseconds); attempts=$($cleanup.Attempts)"
+    Write-SmokeResult 'Uninstall registry removed' ([int]$cleanupState.InstallRecordCount -eq 0) "remaining=$($cleanupState.InstallRecordCount)"
+    Write-SmokeResult 'No remaining process' ([int]$cleanupState.ProcessCount -eq 0) "remaining=$($cleanupState.ProcessCount)"
+    Write-SmokeResult 'Program directory removed' (-not [bool]$cleanupState.InstallDirectoryExists) $cleanupState.RedactedInstallLocation
+    Write-SmokeResult 'Autostart entry removed' ([int]$cleanupState.AutostartEntryCount -eq 0) "remaining=$($cleanupState.AutostartEntryCount)"
+    Write-SmokeResult 'Start menu entries removed' ([int]$cleanupState.StartMenuEntryCount -eq 0) "remaining=$($cleanupState.StartMenuEntryCount)"
     Write-SmokeResult 'User settings policy' $true $(if (Test-Path -LiteralPath $dataDirectory) { 'User data retained by design.' } else { 'No user data directory remained.' })
 )
 $results | Format-Table -AutoSize

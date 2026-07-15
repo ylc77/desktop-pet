@@ -388,6 +388,67 @@ function Get-DeskPetRunningProcesses {
     }
 }
 
+function Get-DeskPetUninstallCleanupState {
+    param(
+        [AllowNull()][AllowEmptyString()][string]$InstallLocation
+    )
+    $records = @(Get-DeskPetInstallRecords -IncludeLegacy)
+    $processes = @(Get-DeskPetRunningProcesses -IncludeLegacy)
+    $autostartEntries = @(Get-DeskPetRunEntries -IncludeLegacy)
+    $startMenuEntries = @(Get-DeskPetStartMenuEntries -IncludeLegacy)
+    $installDirectoryExists = -not [string]::IsNullOrWhiteSpace($InstallLocation) -and
+        [System.IO.Directory]::Exists($InstallLocation)
+    [pscustomobject]@{
+        InstallRecordCount = $records.Count
+        ProcessCount = $processes.Count
+        AutostartEntryCount = $autostartEntries.Count
+        StartMenuEntryCount = $startMenuEntries.Count
+        InstallDirectoryExists = $installDirectoryExists
+        RedactedInstallLocation = $(if ([string]::IsNullOrWhiteSpace($InstallLocation)) { '<empty>' } else { ConvertTo-RedactedNativePath $InstallLocation })
+    }
+}
+
+function Wait-DeskPetUninstallCleanup {
+    param(
+        [AllowNull()][AllowEmptyString()][string]$InstallLocation,
+        [ValidateRange(1, 60)][int]$TimeoutSeconds = 60,
+        [ValidateRange(500, 1000)][int]$PollIntervalMilliseconds = 500,
+        [scriptblock]$Probe = { param($Path) Get-DeskPetUninstallCleanupState -InstallLocation $Path },
+        [scriptblock]$Delay = { param($Milliseconds) Start-Sleep -Milliseconds $Milliseconds },
+        [AllowNull()][scriptblock]$GetElapsedMilliseconds
+    )
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    if ($null -eq $GetElapsedMilliseconds) {
+        $GetElapsedMilliseconds = { $stopwatch.ElapsedMilliseconds }.GetNewClosure()
+    }
+    $timeoutMilliseconds = [int64]$TimeoutSeconds * 1000
+    $attempts = 0
+    while ($true) {
+        $attempts++
+        $state = & $Probe $InstallLocation
+        $elapsedMilliseconds = [int64](& $GetElapsedMilliseconds)
+        $complete = [int](Get-ObjectPropertyValue $state 'InstallRecordCount') -eq 0 -and
+            [int](Get-ObjectPropertyValue $state 'ProcessCount') -eq 0 -and
+            [int](Get-ObjectPropertyValue $state 'AutostartEntryCount') -eq 0 -and
+            [int](Get-ObjectPropertyValue $state 'StartMenuEntryCount') -eq 0 -and
+            -not [bool](Get-ObjectPropertyValue $state 'InstallDirectoryExists')
+        if ($complete -or $elapsedMilliseconds -ge $timeoutMilliseconds) {
+            $stopwatch.Stop()
+            return [pscustomobject]@{
+                Complete = $complete
+                TimedOut = -not $complete
+                ElapsedMilliseconds = $elapsedMilliseconds
+                ElapsedSeconds = [Math]::Round($elapsedMilliseconds / 1000, 3)
+                Attempts = $attempts
+                State = $state
+            }
+        }
+        $remainingMilliseconds = $timeoutMilliseconds - $elapsedMilliseconds
+        $delayMilliseconds = [int][Math]::Min($PollIntervalMilliseconds, $remainingMilliseconds)
+        & $Delay $delayMilliseconds
+    }
+}
+
 function Write-SmokeResult {
     param([string]$Name, [bool]$Passed, [string]$Details)
     $status = if ($Passed) { 'PASS' } else { 'FAIL' }

@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "七酱桌宠",
   "mainBinaryName": "desktop_pet",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1-rc.1",
   "identifier": "dev.deskpet.framework",
   "build": {
     "beforeDevCommand": "npm run dev",

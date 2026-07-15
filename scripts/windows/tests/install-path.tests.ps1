@@ -33,21 +33,22 @@ Test-Throws 'Empty InstallLocation' { Join-NativeFileSystemPath '' $script:Execu
 Test-Throws 'Relative InstallLocation' { Join-NativeFileSystemPath '.\Relative Product' $script:ExecutableName } 'not an absolute path'
 
 $validDirectory = [System.IO.Path]::Combine('C:\Valid', $script:ProductName)
+$expectedVersion = Get-DeskPetReleaseVersion -RepositoryRoot $script:RepositoryRoot
 $validExecutable = [System.IO.Path]::Combine($validDirectory, $script:ExecutableName)
 $directoryExists = { param($Path) $Path -eq $validDirectory }.GetNewClosure()
 $fileExists = { param($Path) $Path -eq $validExecutable }.GetNewClosure()
 $records = @(
-    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion='0.1.0'; InstallLocation='Z:\Old Product'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\Old' },
-    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion='0.1.0'; InstallLocation=($validDirectory + '\'); PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Valid' }
+    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion=$expectedVersion; InstallLocation='Z:\Old Product'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\Old' },
+    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion=$expectedVersion; InstallLocation=($validDirectory + '\'); PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Valid' }
 )
-$selection = Select-DeskPetInstallRecord -Records $records -ExpectedVersion '0.1.0' -DirectoryExists $directoryExists -FileExists $fileExists
+$selection = Select-DeskPetInstallRecord -Records $records -ExpectedVersion $expectedVersion -DirectoryExists $directoryExists -FileExists $fileExists
 Test-Equal 'Second valid record selected after stale first record' $validExecutable $selection.ExecutablePath
 Test-Equal 'Unavailable drive record marked unusable' $false $selection.Evaluations[0].Usable
 Test-Equal 'Current-user record preferred' $true $selection.Evaluation.CurrentUser
 
 $missingExecutable = Select-DeskPetInstallRecord -Records @([pscustomobject]@{
-    DisplayName=$script:ProductName; DisplayVersion='0.1.0'; InstallLocation='C:\Installed'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\MissingExe'
-}) -ExpectedVersion '0.1.0' -DirectoryExists { $true } -FileExists { $false }
+    DisplayName=$script:ProductName; DisplayVersion=$expectedVersion; InstallLocation='C:\Installed'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\MissingExe'
+}) -ExpectedVersion $expectedVersion -DirectoryExists { $true } -FileExists { $false }
 Test-Equal 'Installed record without main executable fails selection' $null $missingExecutable.SelectedRecord
 
 $isolatedResult = & {

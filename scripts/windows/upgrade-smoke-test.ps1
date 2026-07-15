@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory)][string]$PreviousInstallerPath,
     [Parameter(Mandatory)][string]$InstallerPath,
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\qa-results\public-beta\upgrade'),
+    [string]$OutputDirectory,
     [int]$TimeoutSeconds = 300
 )
 
@@ -10,6 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta', 'upgrade') }
 $previous = (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
 $current = (Resolve-Path -LiteralPath $InstallerPath).Path
 Assert-FileExists $previous 'Previous NSIS installer'

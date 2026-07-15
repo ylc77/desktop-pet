@@ -15,7 +15,7 @@
 - `%APPDATA%\dev.deskpet.framework`
 - `%LOCALAPPDATA%\dev.deskpet.framework`
 
-不得删除其父目录。当前 0.1.0 的最新真实卸载 QA 仍发现程序目录、快捷方式和卸载记录残留，因此公开测试前必须重新修复并验证。诊断预览命令：
+不得删除其父目录。`0.1.0-beta.1-rc.1` 已增加最长 60 秒的卸载清理轮询，但真实 CurrentMachine 卸载仍需用户确认后复测。诊断预览命令：
 
 ```powershell
 .\scripts\windows\run-qa-suite.ps1 -Mode CurrentMachine -ResumeFromPhase Uninstallation -WhatIf

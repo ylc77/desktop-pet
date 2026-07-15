@@ -1,13 +1,14 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [ValidateSet('BeforeReboot','AfterReboot')][string]$Phase,
-    [string]$StatePath = (Join-Path $PSScriptRoot '..\..\qa-results\public-beta\restart\restart-state.json')
+    [string]$StatePath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
+if ([string]::IsNullOrWhiteSpace($StatePath)) { $StatePath = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta', 'restart', 'restart-state.json') }
+. "$PSScriptRoot\common.ps1"
 $path = [System.IO.Path]::GetFullPath($StatePath)
 [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path)) | Out-Null
 

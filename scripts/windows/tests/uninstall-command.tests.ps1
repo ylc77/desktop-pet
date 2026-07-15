@@ -17,6 +17,7 @@ function Test-Throws([string]$Name, [scriptblock]$Action, [string]$Pattern) {
     catch { Add-TestResult $Name ($_.Exception.Message -match $Pattern) $_.Exception.Message }
 }
 $exists = { $true }
+$expectedVersion = Get-DeskPetReleaseVersion -RepositoryRoot $script:RepositoryRoot
 
 $normalUninstaller = [System.IO.Path]::Combine('C:\Program Files', $script:ProductName, 'uninstall.exe')
 $normalRecord = [pscustomobject]@{ QuietUninstallString=''; UninstallString=('"' + $normalUninstaller + '"') }
@@ -46,9 +47,9 @@ Test-Equal 'Command arguments remain separate from executable path' '/LANG=zh_CN
 
 $records = @(
     [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion='0.0.9'; QuietUninstallString=''; UninstallString='"Z:\Old\uninstall.exe"'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\Old' },
-    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion='0.1.0'; QuietUninstallString=''; UninstallString='"C:\Current\uninstall.exe"'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Current' }
+    [pscustomobject]@{ DisplayName=$script:ProductName; DisplayVersion=$expectedVersion; QuietUninstallString=''; UninstallString='"C:\Current\uninstall.exe"'; PSPath='Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\Current' }
 )
-$selection = Select-DeskPetUninstallRecord -Records $records -ExpectedVersion '0.1.0' -FileExists $exists
+$selection = Select-DeskPetUninstallRecord -Records $records -ExpectedVersion $expectedVersion -FileExists $exists
 Test-Equal 'Multiple records select matching current version' 'C:\Current\uninstall.exe' $selection.Command.FilePath
 Test-Equal 'Multiple records prefer current-user record' $true $selection.Evaluation.CurrentUser
 Test-Equal 'Old version is marked unusable' $false $selection.Evaluations[0].Usable

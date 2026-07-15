@@ -1,7 +1,7 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [ValidateSet('Safe','CurrentMachine','Sandbox','CleanWindows11','CleanWindows10','Upgrade','Performance','PublicBetaAudit')][string]$Mode = 'PublicBetaAudit',
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\qa-results\public-beta'),
+    [string]$OutputDirectory,
     [string]$InstallerPath,
     [string]$PreviousInstallerPath,
     [switch]$SkipBuild,
@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 . "$PSScriptRoot\public-beta-common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta') }
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 $commit = (& git -C $repo rev-parse HEAD).Trim()
 $command = ".\scripts\windows\run-public-beta-qa.ps1 -Mode $Mode -OutputDirectory .\qa-results\public-beta"

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
 const config = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json"), "utf8"));
+const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 
 function filesUnder(directory: string): string[] {
   return readdirSync(directory).flatMap((name) => {
@@ -18,6 +19,14 @@ describe("application rebranding", () => {
     expect(config.mainBinaryName).toBe("desktop_pet");
     expect(config.identifier).toBe("dev.deskpet.framework");
     expect(config.app.windows[0].title).toBe("七酱桌宠");
+  });
+
+  it("keeps the RC version consistent across JavaScript, Tauri, and Cargo", () => {
+    const cargo = readFileSync(resolve(root, "src-tauri/Cargo.toml"), "utf8");
+    const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+    expect(packageJson.version).toBe("0.1.0-beta.1-rc.1");
+    expect(config.version).toBe(packageJson.version);
+    expect(cargoVersion).toBe(packageJson.version);
   });
 
   it("bundles all required Windows icon resources", () => {

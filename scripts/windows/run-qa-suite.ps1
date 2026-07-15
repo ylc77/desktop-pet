@@ -1,7 +1,7 @@
 ﻿[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [ValidateSet('Safe','CurrentMachine','CleanEnvironment')][string]$Mode = 'Safe',
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\qa-results'),
+    [string]$OutputDirectory,
     [string]$InstallerPath,
     [switch]$SkipBuild,
     [switch]$SkipInstall,
@@ -13,6 +13,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = [System.IO.Path]::Combine($repo, 'qa-results') }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if ($ResumeFromPhase -ne 'Beginning' -and $Mode -ne 'CurrentMachine') { throw '-ResumeFromPhase Uninstallation requires -Mode CurrentMachine.' }
 if ($WhatIfPreference -and $ResumeFromPhase -eq 'Beginning') {
