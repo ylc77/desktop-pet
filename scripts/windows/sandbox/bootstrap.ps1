@@ -13,15 +13,15 @@ try {
     [pscustomobject]@{ Installed=[bool]$webView; Version=$(if($webView){$webView.pv}else{$null}); CheckedAtUtc=[DateTime]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $ResultRoot 'webview2.json')
     & (Join-Path $InputRoot 'scripts\windows\install-smoke-test.ps1') -InstallerPath $installer.FullName -Confirm:$false
     . (Join-Path $InputRoot 'scripts\windows\common.ps1')
-    $record = @(Get-DeskPetInstallRecords) | Select-Object -First 1
-    if (-not $record) { throw 'Install registry entry was not found.' }
-    $exe = Join-Path ([string]$record.InstallLocation) 'desk-pet-framework.exe'
+    $selection = Select-DeskPetInstallRecord -Records @(Get-DeskPetInstallRecords) -ExpectedVersion (Get-DeskPetReleaseVersion -RepositoryRoot $InputRoot)
+    if (-not $selection.SelectedRecord) { throw 'Installer completed, but no valid installed application record was found.' }
+    $exe = [string]$selection.ExecutablePath
     Start-Process -FilePath $exe -WindowStyle Hidden
     Start-Sleep -Seconds 3
     Start-Process -FilePath $exe -WindowStyle Hidden
     Start-Sleep -Seconds 3
     $processes = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue)
-    [pscustomobject]@{ ProcessCount=$processes.Count; SingleInstance=$processes.Count -eq 1; ExecutableExists=Test-Path $exe } | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $ResultRoot 'runtime.json')
+    [pscustomobject]@{ ProcessCount=$processes.Count; SingleInstance=$processes.Count -eq 1; ExecutableExists=[System.IO.File]::Exists($exe) } | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $ResultRoot 'runtime.json')
     Write-Host 'Exit the pet normally from its tray/context menu, then press Enter here.'
     Read-Host | Out-Null
     if (Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue) { throw 'Application still runs; normal exit was not confirmed.' }

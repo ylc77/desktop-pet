@@ -43,6 +43,143 @@ function Get-CurrentProcessArchitecture {
     return 'x86'
 }
 
+function Get-ObjectPropertyValue {
+    param(
+        [Parameter(Mandatory)][object]$InputObject,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Join-NativeFileSystemPath {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$BasePath,
+        [Parameter(Mandatory)][string]$ChildPath
+    )
+    $expanded = [Environment]::ExpandEnvironmentVariables($BasePath).Trim().Trim('"')
+    if ([string]::IsNullOrWhiteSpace($expanded)) { throw 'InstallLocation is empty.' }
+    if (-not [System.IO.Path]::IsPathRooted($expanded)) {
+        throw "InstallLocation is not an absolute path: $expanded"
+    }
+    try {
+        return [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($expanded, $ChildPath))
+    } catch {
+        throw "InstallLocation is not a valid native path: $expanded"
+    }
+}
+
+function ConvertTo-RedactedNativePath {
+    param([AllowNull()][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '<empty>' }
+    $redacted = [Environment]::ExpandEnvironmentVariables($Path).Trim().Trim('"')
+    $locations = @(
+        @{ Value=$env:LOCALAPPDATA; Token='%LOCALAPPDATA%' },
+        @{ Value=$env:APPDATA; Token='%APPDATA%' },
+        @{ Value=$env:USERPROFILE; Token='%USERPROFILE%' },
+        @{ Value=$env:ProgramFiles; Token='%ProgramFiles%' },
+        @{ Value=${env:ProgramFiles(x86)}; Token='%ProgramFiles(x86)%' }
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.Value) } |
+        Sort-Object { ([string]$_.Value).Length } -Descending
+    foreach ($location in $locations) {
+        $prefix = ([string]$location.Value).TrimEnd('\')
+        if ($redacted.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+            return [string]$location.Token + $redacted.Substring($prefix.Length)
+        }
+    }
+    if ($redacted -match '^[A-Za-z]:\\Users\\[^\\]+(?<rest>\\.*)?$') {
+        return '%USERPROFILE%' + [string]$Matches['rest']
+    }
+    return $redacted
+}
+
+function Get-DeskPetReleaseVersion {
+    param([Parameter(Mandatory)][string]$RepositoryRoot)
+    $configPath = [System.IO.Path]::Combine($RepositoryRoot, 'src-tauri', 'tauri.conf.json')
+    if (-not [System.IO.File]::Exists($configPath)) { throw "Tauri configuration not found: $configPath" }
+    $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    return [string](Get-ObjectPropertyValue -InputObject $config -Name 'version')
+}
+
+function Select-DeskPetInstallRecord {
+    param(
+        [AllowEmptyCollection()][object[]]$Records = @(),
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [string]$ExecutableName = 'desk-pet-framework.exe',
+        [scriptblock]$DirectoryExists = { param($Path) [System.IO.Directory]::Exists($Path) },
+        [scriptblock]$FileExists = { param($Path) [System.IO.File]::Exists($Path) }
+    )
+    $evaluations = @()
+    foreach ($record in @($Records)) {
+        $displayName = [string](Get-ObjectPropertyValue $record 'DisplayName')
+        $displayVersion = [string](Get-ObjectPropertyValue $record 'DisplayVersion')
+        $installLocation = [string](Get-ObjectPropertyValue $record 'InstallLocation')
+        $psPath = [string](Get-ObjectPropertyValue $record 'PSPath')
+        $reasons = @()
+        $executablePath = $null
+        $normalizedDirectory = $null
+        if ($displayName -ne $script:ProductName) { $reasons += 'DisplayName is not an exact match.' }
+        if ($displayVersion -ne $ExpectedVersion) { $reasons += "DisplayVersion does not match $ExpectedVersion." }
+        try {
+            $executablePath = Join-NativeFileSystemPath -BasePath $installLocation -ChildPath $ExecutableName
+            $normalizedDirectory = [System.IO.Path]::GetDirectoryName($executablePath)
+            if (-not (& $DirectoryExists $normalizedDirectory)) { $reasons += 'InstallLocation directory does not exist or is unavailable.' }
+            if (-not (& $FileExists $executablePath)) { $reasons += 'Main executable does not exist.' }
+        } catch {
+            $reasons += $_.Exception.Message
+        }
+        $evaluations += [pscustomobject]@{
+            Record=$record
+            DisplayName=$displayName
+            DisplayVersion=$displayVersion
+            RedactedInstallLocation=ConvertTo-RedactedNativePath $installLocation
+            InstallDirectory=$normalizedDirectory
+            ExecutablePath=$executablePath
+            CurrentUser=($psPath -match 'HKEY_CURRENT_USER|HKCU:')
+            Usable=($reasons.Count -eq 0)
+            Reasons=@($reasons)
+        }
+    }
+    $selected = @($evaluations | Where-Object { $_.Usable } | Sort-Object @{Expression='CurrentUser';Descending=$true}) | Select-Object -First 1
+    [pscustomobject]@{
+        SelectedRecord=$(if ($selected) { $selected.Record } else { $null })
+        ExecutablePath=$(if ($selected) { $selected.ExecutablePath } else { $null })
+        Evaluation=$(if ($selected) { $selected } else { $null })
+        Evaluations=@($evaluations)
+    }
+}
+
+function Write-QAResultArtifacts {
+    param(
+        [Parameter(Mandatory)][string]$OutputDirectory,
+        [AllowEmptyCollection()][object[]]$Results = @(),
+        [Parameter(Mandatory)][string]$Mode,
+        [Parameter(Mandatory)][string]$Phase,
+        [AllowNull()][string]$FailureMessage,
+        [AllowNull()][object]$Transaction
+    )
+    [System.IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
+    ConvertTo-Json -InputObject @($Results) -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'qa-results.json'))
+    if ($null -ne $Transaction) {
+        $Transaction | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'current-machine-state.json'))
+    }
+    $passed = @($Results | Where-Object { $_.status -eq 'passed' })
+    $failed = @($Results | Where-Object { $_.status -eq 'failed' })
+    $blocked = @($Results | Where-Object { $_.status -eq 'blocked' })
+    $skipped = @($Results | Where-Object { $_.status -eq 'skipped' })
+    $summary = @(
+        '# Windows QA summary', '', "- Mode: $Mode", "- Final phase: $Phase",
+        "- Generated UTC: $([DateTime]::UtcNow.ToString('o'))", "- Failure: $(if ($FailureMessage) { $FailureMessage } else { 'none' })", '',
+        "## Passed ($($passed.Count))", ''
+    ) + @($passed | ForEach-Object { "- $($_.name)" }) + @('', "## Failed ($($failed.Count))", '') +
+        @($failed | ForEach-Object { "- $($_.name): $($_.details)" }) + @('', "## Blocked ($($blocked.Count))", '') +
+        @($blocked | ForEach-Object { "- $($_.name): $($_.details)" }) + @('', '## Manual Windows checks', '',
+        '- Real Windows 10/11, multi-monitor and DPI, sleep/wake, SmartScreen, tray interaction, and eight-hour performance testing.', '',
+        "## Skipped ($($skipped.Count))", '') + @($skipped | ForEach-Object { "- $($_.name): $($_.details)" })
+    ($summary -join [Environment]::NewLine) | Set-Content -Encoding UTF8 -LiteralPath ([System.IO.Path]::Combine($OutputDirectory, 'qa-summary.md'))
+}
+
 function Get-DeskPetInstallRecords {
     $roots = @(
         'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',

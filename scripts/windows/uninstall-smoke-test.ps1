@@ -10,8 +10,11 @@ if ($records.Count -eq 0 -and $WhatIfPreference) { Write-Host 'No installed appl
 if ($records.Count -ne 1) { throw "Expected one installed application record; found $($records.Count)." }
 if (Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue) { throw 'Application is running. Exit through the tray before uninstalling.' }
 $record = $records[0]
-$installLocation = [string]$record.InstallLocation
-$commandLine = if ($record.QuietUninstallString) { [string]$record.QuietUninstallString } else { [string]$record.UninstallString }
+$rawInstallLocation = [string](Get-ObjectPropertyValue $record 'InstallLocation')
+$installLocation = $null
+try { $installLocation = [System.IO.Path]::GetDirectoryName((Join-NativeFileSystemPath $rawInstallLocation 'placeholder.file')) } catch { $installLocation = $null }
+$quietUninstall = [string](Get-ObjectPropertyValue $record 'QuietUninstallString')
+$commandLine = if (-not [string]::IsNullOrWhiteSpace($quietUninstall)) { $quietUninstall } else { [string](Get-ObjectPropertyValue $record 'UninstallString') }
 if ($commandLine -notmatch '^\s*"([^"]+)"\s*(.*)$' -and $commandLine -notmatch '^\s*(\S+)\s*(.*)$') { throw 'Cannot safely parse uninstall command.' }
 $uninstaller = $Matches[1]
 $arguments = $Matches[2]
@@ -27,7 +30,7 @@ $dataDirectory = Join-Path $env:APPDATA $script:AppIdentifier
 $results = @(
     Write-SmokeResult 'Uninstall registry removed' ($remaining.Count -eq 0) "remaining=$($remaining.Count)"
     Write-SmokeResult 'No remaining process' ($running.Count -eq 0) "remaining=$($running.Count)"
-    Write-SmokeResult 'Program directory removed' (-not $installLocation -or -not (Test-Path -LiteralPath $installLocation)) $(if ($installLocation) { $installLocation } else { 'InstallLocation was empty.' })
+    Write-SmokeResult 'Program directory removed' (-not $installLocation -or -not [System.IO.Directory]::Exists($installLocation)) $(if ($installLocation) { ConvertTo-RedactedNativePath $installLocation } else { 'InstallLocation was empty or invalid.' })
     Write-SmokeResult 'Autostart entry removed' ($autostart.Count -eq 0) "remaining=$($autostart.Count)"
     Write-SmokeResult 'User settings policy' $true $(if (Test-Path -LiteralPath $dataDirectory) { 'User data retained by design.' } else { 'No user data directory remained.' })
 )

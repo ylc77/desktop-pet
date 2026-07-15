@@ -9,6 +9,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
+$repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
+$expectedVersion = Get-DeskPetReleaseVersion -RepositoryRoot $repo
 
 $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 Assert-FileExists $resolvedInstaller 'NSIS installer'
@@ -16,8 +18,14 @@ $beforeProcesses = @(Get-Process -Name $script:ProcessName -ErrorAction Silently
 $beforeInstalls = @(Get-DeskPetInstallRecords)
 $beforeAutostart = @(Get-DeskPetRunEntries)
 $settingsPath = Join-Path $env:APPDATA "$script:AppIdentifier\settings.json"
-$beforeSettingsHash = if (Test-Path -LiteralPath $settingsPath) { (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash } else { $null }
-$hash = Get-FileHash -LiteralPath $resolvedInstaller -Algorithm SHA256
+$savedWhatIfPreference = $WhatIfPreference
+$WhatIfPreference = $false
+try {
+    $beforeSettingsHash = if (Test-Path -LiteralPath $settingsPath) { (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash } else { $null }
+    $hash = Get-FileHash -LiteralPath $resolvedInstaller -Algorithm SHA256
+} finally {
+    $WhatIfPreference = $savedWhatIfPreference
+}
 
 $report = @(
     Write-SmokeResult 'Installer exists' $true (Split-Path $resolvedInstaller -Leaf)
@@ -40,18 +48,21 @@ if ($process.ExitCode -ne 0) { throw "Installer exited with code $($process.Exit
 
 $afterInstalls = @(Get-DeskPetInstallRecords)
 $afterAutostart = @(Get-DeskPetRunEntries)
-$install = $afterInstalls | Select-Object -First 1
-$mainExecutable = if ($install -and $install.InstallLocation) { Join-Path $install.InstallLocation 'desk-pet-framework.exe' } else { $null }
-$report += Write-SmokeResult 'Install registry entry' ($afterInstalls.Count -eq 1) "count=$($afterInstalls.Count)"
-$report += Write-SmokeResult 'Main executable' ([bool]$mainExecutable -and (Test-Path -LiteralPath $mainExecutable)) $(if ($mainExecutable) { $mainExecutable } else { 'InstallLocation was not recorded.' })
+$selection = Select-DeskPetInstallRecord -Records $afterInstalls -ExpectedVersion $expectedVersion
+foreach ($evaluation in @($selection.Evaluations | Where-Object { -not $_.Usable })) {
+    $report += Write-SmokeResult 'Ignored unusable install registry entry' $true ("display={0}; version={1}; path={2}; reasons={3}" -f $evaluation.DisplayName, $evaluation.DisplayVersion, $evaluation.RedactedInstallLocation, ($evaluation.Reasons -join ' '))
+}
+$mainExecutable = [string]$selection.ExecutablePath
+$report += Write-SmokeResult 'Usable install registry entry' ([bool]$selection.SelectedRecord) "matches=$(@($selection.Evaluations | Where-Object Usable).Count); total=$($afterInstalls.Count); expectedVersion=$expectedVersion"
+$report += Write-SmokeResult 'Main executable' ([bool]$mainExecutable -and [System.IO.File]::Exists($mainExecutable)) $(if ($selection.Evaluation) { $selection.Evaluation.RedactedInstallLocation } else { 'No usable InstallLocation was recorded.' })
 $report += Write-SmokeResult 'No duplicate autostart' ($afterAutostart.Count -le 1) "count=$($afterAutostart.Count)"
 if ($ExpectUpgrade -and $beforeSettingsHash) {
     $afterSettingsHash = if (Test-Path -LiteralPath $settingsPath) { (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash } else { $null }
     $report += Write-SmokeResult 'Upgrade preserved settings' ($afterSettingsHash -eq $beforeSettingsHash) $(if ($afterSettingsHash) { 'Settings SHA-256 unchanged.' } else { 'Settings file missing after upgrade.' })
 }
 if ($ExpectUpgrade -and $beforeAutostart.Count -eq 1 -and $afterAutostart.Count -eq 1) {
-    $registeredPath = $afterAutostart[0].Value.Trim('"')
-    $report += Write-SmokeResult 'Upgrade refreshed autostart path' (Test-Path -LiteralPath $registeredPath) $registeredPath
+    $registeredPath = ([Environment]::ExpandEnvironmentVariables([string]$afterAutostart[0].Value)).Trim().Trim('"')
+    $report += Write-SmokeResult 'Upgrade refreshed autostart path' ([System.IO.File]::Exists($registeredPath)) (ConvertTo-RedactedNativePath $registeredPath)
 }
 $report | Format-Table -AutoSize
 if ($report.Where({ $_.Status -eq 'FAIL' }).Count) { exit 3 }

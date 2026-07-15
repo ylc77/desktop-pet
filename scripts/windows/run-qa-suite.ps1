@@ -20,6 +20,7 @@ if ($WhatIfPreference) {
 $directories = @($output, (Join-Path $output 'screenshots'), (Join-Path $output 'performance'), (Join-Path $output 'install'), (Join-Path $output 'uninstall'))
 $directories | ForEach-Object { New-Item -ItemType Directory -Path $_ -Force | Out-Null }
 $commandLog = Join-Path $output 'command-log.txt'
+if (-not [System.IO.File]::Exists($commandLog)) { Set-Content -Encoding UTF8 -LiteralPath $commandLog -Value '' }
 $results = @()
 $env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')
 
@@ -38,64 +39,113 @@ function Invoke-QACommand([string]$Name, [string]$Command, [string]$Category = '
     return $code -eq 0
 }
 
-$environment = [ordered]@{
-    capturedAtUtc=[DateTime]::UtcNow.ToString('o'); mode=$Mode; computerName=$env:COMPUTERNAME
-    os=(Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,OSArchitecture)
-    powershell=$PSVersionTable.PSVersion.ToString()
-    nativeProcessorArchitecture=Get-NativeProcessorArchitecture
-    is64BitOperatingSystem=[System.Environment]::Is64BitOperatingSystem
-    processArchitecture=Get-CurrentProcessArchitecture
-    is64BitProcess=[System.Environment]::Is64BitProcess
-    webView2=$null; testEnvironments=$null
+function Assert-QACommand([string]$Name, [string]$Command, [string]$Category = 'current-machine') {
+    if (-not (Invoke-QACommand $Name $Command $Category)) { throw "QA command failed: $Name" }
 }
-$webView = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
-$environment.webView2 = @{ installed=[bool]$webView; version=$(if($webView){[string]$webView.pv}else{$null}); scenario='installed on current host; missing scenarios not modified on host' }
-$environment.testEnvironments = (& (Join-Path $PSScriptRoot 'detect-test-environments.ps1') | ConvertFrom-Json)
-$environment | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $output 'environment.json')
 
-[void](Invoke-QACommand 'Windows build environment' '& .\scripts\check-windows-env.ps1')
-[void](Invoke-QACommand 'TypeScript typecheck' 'npm run typecheck')
-[void](Invoke-QACommand 'Frontend tests' 'npm run test')
-[void](Invoke-QACommand 'Character pack validation' 'npm run validate:characters')
-[void](Invoke-QACommand 'Frontend production build' 'npm run build')
-[void](Invoke-QACommand 'Rust formatting' 'cargo fmt --check --manifest-path src-tauri/Cargo.toml')
-[void](Invoke-QACommand 'Rust check' 'cargo check --manifest-path src-tauri/Cargo.toml -j1')
-[void](Invoke-QACommand 'Rust release tests' 'cargo test --release --manifest-path src-tauri/Cargo.toml -j1')
-[void](Invoke-QACommand 'Isolated character fault tests' "& .\scripts\windows\run-fault-injection-tests.ps1 -OutputPath '$((Join-Path $output 'fault-results.json').Replace("'", "''"))'")
-if ($SkipBuild) { Add-Result 'NSIS release build' 'automatic' 'skipped' 'npm run build:release' 'Skipped by -SkipBuild.' }
-else { [void](Invoke-QACommand 'NSIS release build' 'npm run build:release') }
-[void](Invoke-QACommand 'Release manifest generation' "& .\scripts\create-release-manifest.ps1 -TestSummary @('QA Safe suite')")
-[void](Invoke-QACommand 'Signature, hash and manifest verification' '& .\scripts\windows\verify-release-artifacts.ps1')
-[void](Invoke-QACommand 'PowerShell syntax' '$e=@(); Get-ChildItem .\scripts -Filter *.ps1 -Recurse | ForEach-Object { try { [void][scriptblock]::Create((Get-Content -Raw -Encoding UTF8 $_.FullName)) } catch { $e += $_.Exception.Message } }; if($e.Count){$e;exit 1}else{exit 0}')
-[void](Invoke-QACommand 'Git worktree clean' '$s=& git status --porcelain; if($s){$s;exit 1}else{exit 0}')
+$currentPhase = 'initialization'
+$failureMessage = $null
+$exitCode = 0
+$transaction = [ordered]@{
+    mode=$Mode; phase=$currentPhase; installerCommandCompleted=$false; installationDetected=$false
+    processCount=0; uninstallRecordCount=0; installRecords=@(); recoveryCommands=@(
+        "Get-Process -Name '$script:ProcessName' -ErrorAction SilentlyContinue",
+        '.\scripts\windows\uninstall-smoke-test.ps1 -WhatIf'
+    )
+}
+try {
+    $currentPhase = 'environment-capture'
+    $environment = [ordered]@{
+        capturedAtUtc=[DateTime]::UtcNow.ToString('o'); mode=$Mode; computerName=$env:COMPUTERNAME
+        os=(Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,OSArchitecture)
+        powershell=$PSVersionTable.PSVersion.ToString(); nativeProcessorArchitecture=Get-NativeProcessorArchitecture
+        is64BitOperatingSystem=[System.Environment]::Is64BitOperatingSystem; processArchitecture=Get-CurrentProcessArchitecture
+        is64BitProcess=[System.Environment]::Is64BitProcess; webView2=$null; testEnvironments=$null
+    }
+    $webView = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
+    $environment.webView2 = @{ installed=[bool]$webView; version=$(if($webView){[string]$webView.pv}else{$null}); scenario='installed on current host; missing scenarios not modified on host' }
+    $environment.testEnvironments = (& (Join-Path $PSScriptRoot 'detect-test-environments.ps1') | ConvertFrom-Json)
+    $environment | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $output 'environment.json')
 
-if ($Mode -ne 'Safe') {
-    $actions = @('Install the current NSIS package for the current user','Launch the installed app twice and inspect single-instance behavior','Wait for normal tray/context-menu exit','Inspect settings, logs, processes and autostart entries','Run the registered uninstaller and inspect leftovers')
-    Write-Warning ("This mode can change the current Windows user profile:`r`n - " + ($actions -join "`r`n - "))
-    if ($Mode -eq 'CleanEnvironment' -and $env:DESK_PET_QA_CLEAN_ENVIRONMENT -ne '1') {
-        Add-Result 'Clean environment authorization marker' 'blocked' 'blocked' '' 'Set DESK_PET_QA_CLEAN_ENVIRONMENT=1 only inside an explicitly designated Sandbox, VM, or disposable test system.'
-    } elseif ($SkipInstall) {
-        Add-Result 'Install lifecycle' 'manual' 'skipped' '' 'Skipped by -SkipInstall.'
-    } elseif ($PSCmdlet.ShouldProcess('Current Windows user profile', ($actions -join '; '))) {
-        $installer = (Get-ChildItem (Join-Path $repo 'release') -Filter '*setup.exe' -File | Select-Object -First 1).FullName
-        [void](Invoke-QACommand 'Install application' "& .\scripts\windows\install-smoke-test.ps1 -InstallerPath '$($installer.Replace("'", "''"))' -Confirm:`$false" 'current-machine')
-        $records = @(& { . (Join-Path $PSScriptRoot 'common.ps1'); Get-DeskPetInstallRecords })
-        $exe = if ($records.Count -eq 1) { Join-Path ([string]$records[0].InstallLocation) 'desk-pet-framework.exe' } else { $null }
-        if ($exe -and (Test-Path -LiteralPath $exe)) {
-            [void](Invoke-QACommand 'Single instance and normal exit' "& .\scripts\windows\process-smoke-test.ps1 -ExecutablePath '$($exe.Replace("'", "''"))' -ManualExitTimeoutSeconds 120 -Confirm:`$false" 'current-machine')
-            if (-not $SkipPerformance -and (Get-Process -Name 'desk-pet-framework' -ErrorAction SilentlyContinue)) {
-                [void](Invoke-QACommand 'Ten-minute performance capture' "& .\scripts\windows\monitor-process.ps1 -DurationMinutes 10 -IntervalSeconds 10 -OutputPath '$((Join-Path $output 'performance\short.csv').Replace("'", "''"))'" 'current-machine')
+    $currentPhase = 'automatic-checks'
+    [void](Invoke-QACommand 'Windows build environment' '& .\scripts\check-windows-env.ps1')
+    [void](Invoke-QACommand 'TypeScript typecheck' 'npm run typecheck')
+    [void](Invoke-QACommand 'Frontend tests' 'npm run test')
+    [void](Invoke-QACommand 'Character pack validation' 'npm run validate:characters')
+    [void](Invoke-QACommand 'Frontend production build' 'npm run build')
+    [void](Invoke-QACommand 'Rust formatting' 'cargo fmt --check --manifest-path src-tauri/Cargo.toml')
+    [void](Invoke-QACommand 'Rust check' 'cargo check --manifest-path src-tauri/Cargo.toml -j1')
+    [void](Invoke-QACommand 'Rust release tests' 'cargo test --release --manifest-path src-tauri/Cargo.toml -j1')
+    [void](Invoke-QACommand 'Isolated character fault tests' "& .\scripts\windows\run-fault-injection-tests.ps1 -OutputPath '$((Join-Path $output 'fault-results.json').Replace("'", "''"))'")
+    if ($SkipBuild) { Add-Result 'NSIS release build' 'automatic' 'skipped' 'npm run build:release' 'Skipped by -SkipBuild.' }
+    else { [void](Invoke-QACommand 'NSIS release build' 'npm run build:release') }
+    [void](Invoke-QACommand 'Release manifest generation' "& .\scripts\create-release-manifest.ps1 -TestSummary @('QA Safe suite')")
+    [void](Invoke-QACommand 'Signature, hash and manifest verification' '& .\scripts\windows\verify-release-artifacts.ps1')
+    [void](Invoke-QACommand 'PowerShell syntax' '$e=@(); Get-ChildItem .\scripts -Filter *.ps1 -Recurse | ForEach-Object { try { [void][scriptblock]::Create((Get-Content -Raw -Encoding UTF8 $_.FullName)) } catch { $e += $_.Exception.Message } }; if($e.Count){$e;exit 1}else{exit 0}')
+    [void](Invoke-QACommand 'Git worktree clean' '$s=& git status --porcelain; if($s){$s;exit 1}else{exit 0}')
+
+    if ($Mode -ne 'Safe') {
+        $actions = @('Install the current NSIS package for the current user','Launch the installed app twice and inspect single-instance behavior','Wait for normal tray/context-menu exit','Inspect settings, logs, processes and autostart entries','Run the registered uninstaller and inspect leftovers')
+        Write-Warning ("This mode can change the current Windows user profile:`r`n - " + ($actions -join "`r`n - "))
+        if ($Mode -eq 'CleanEnvironment' -and $env:DESK_PET_QA_CLEAN_ENVIRONMENT -ne '1') {
+            Add-Result 'Clean environment authorization marker' 'blocked' 'blocked' '' 'Set DESK_PET_QA_CLEAN_ENVIRONMENT=1 only inside an explicitly designated Sandbox, VM, or disposable test system.'
+        } elseif ($SkipInstall) {
+            Add-Result 'Install lifecycle' 'manual' 'skipped' '' 'Skipped by -SkipInstall.'
+        } elseif ($PSCmdlet.ShouldProcess('Current Windows user profile', ($actions -join '; '))) {
+            $currentPhase = 'installer-selection'
+            $installer = Get-ChildItem (Join-Path $repo 'release') -Filter '*setup.exe' -File | Select-Object -First 1
+            if (-not $installer) { throw 'No current NSIS installer was found.' }
+            $currentPhase = 'installation'
+            Assert-QACommand 'Install application' "& .\scripts\windows\install-smoke-test.ps1 -InstallerPath '$($installer.FullName.Replace("'", "''"))' -Confirm:`$false"
+            $transaction.installerCommandCompleted = $true
+            $currentPhase = 'installed-application-discovery'
+            $records = @(Get-DeskPetInstallRecords)
+            $transaction.installationDetected = $records.Count -gt 0
+            $selection = Select-DeskPetInstallRecord -Records $records -ExpectedVersion (Get-DeskPetReleaseVersion -RepositoryRoot $repo)
+            foreach ($evaluation in @($selection.Evaluations | Where-Object { -not $_.Usable })) {
+                Add-Result 'Stale or unusable install record' 'current-machine' 'blocked' '' ("display={0}; version={1}; path={2}; reasons={3}" -f $evaluation.DisplayName, $evaluation.DisplayVersion, $evaluation.RedactedInstallLocation, ($evaluation.Reasons -join ' '))
             }
-        } else { Add-Result 'Installed executable discovery' 'current-machine' 'failed' '' 'A unique installed executable was not found.' }
-        [void](Invoke-QACommand 'Autostart inspection' '& .\scripts\windows\check-autostart.ps1' 'current-machine')
-        [void](Invoke-QACommand 'Uninstall application' '& .\scripts\windows\uninstall-smoke-test.ps1 -Confirm:$false' 'current-machine')
-        [void](Invoke-QACommand 'Post-uninstall leftovers' '& .\scripts\windows\check-leftovers.ps1' 'current-machine')
-    } else { Add-Result 'Current-machine lifecycle' 'manual' 'skipped' '' 'Declined or previewed by ShouldProcess/WhatIf.' }
+            if (-not $selection.SelectedRecord) { throw 'Installer completed, but no valid installed application record was found.' }
+            Add-Result 'Installed executable discovery' 'current-machine' 'passed' '' ("version={0}; path={1}; currentUser={2}" -f $selection.Evaluation.DisplayVersion, $selection.Evaluation.RedactedInstallLocation, $selection.Evaluation.CurrentUser)
+            $exe = [string]$selection.ExecutablePath
+            $currentPhase = 'single-instance-and-normal-exit'
+            Assert-QACommand 'Single instance and normal exit' "& .\scripts\windows\process-smoke-test.ps1 -ExecutablePath '$($exe.Replace("'", "''"))' -ManualExitTimeoutSeconds 120 -Confirm:`$false"
+            if (-not $SkipPerformance -and (Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue)) {
+                $currentPhase = 'performance-capture'
+                Assert-QACommand 'Ten-minute performance capture' "& .\scripts\windows\monitor-process.ps1 -DurationMinutes 10 -IntervalSeconds 10 -OutputPath '$((Join-Path $output 'performance\short.csv').Replace("'", "''"))'"
+            }
+            $currentPhase = 'autostart-inspection'
+            Assert-QACommand 'Autostart inspection' '& .\scripts\windows\check-autostart.ps1'
+            $currentPhase = 'uninstallation'
+            Assert-QACommand 'Uninstall application' '& .\scripts\windows\uninstall-smoke-test.ps1 -Confirm:$false'
+            $currentPhase = 'post-uninstall-leftovers'
+            Assert-QACommand 'Post-uninstall leftovers' '& .\scripts\windows\check-leftovers.ps1'
+            $currentPhase = 'completed'
+        } else { Add-Result 'Current-machine lifecycle' 'manual' 'skipped' '' 'Declined by ShouldProcess.' }
+    } else { $currentPhase = 'completed' }
+} catch {
+    $failureMessage = $_.Exception.Message
+    $exitCode = 2
+    Add-Result 'QA suite exception' 'transaction' 'failed' '' "phase=$currentPhase; $failureMessage"
+} finally {
+    $transaction.phase = $currentPhase
+    if ($Mode -ne 'Safe') {
+        try {
+            $finalRecords = @(Get-DeskPetInstallRecords)
+            $transaction.uninstallRecordCount = $finalRecords.Count
+            $transaction.installationDetected = $transaction.installationDetected -or $finalRecords.Count -gt 0
+            $transaction.installRecords = @($finalRecords | ForEach-Object {
+                [ordered]@{
+                    displayName=[string](Get-ObjectPropertyValue $_ 'DisplayName')
+                    displayVersion=[string](Get-ObjectPropertyValue $_ 'DisplayVersion')
+                    installLocation=ConvertTo-RedactedNativePath ([string](Get-ObjectPropertyValue $_ 'InstallLocation'))
+                    currentUser=([string](Get-ObjectPropertyValue $_ 'PSPath') -match 'HKEY_CURRENT_USER|HKCU:')
+                }
+            })
+        } catch { $transaction['installRecordInspectionError'] = $_.Exception.Message }
+        $transaction.processCount = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue).Count
+    }
+    Write-QAResultArtifacts -OutputDirectory $output -Results $results -Mode $Mode -Phase $currentPhase -FailureMessage $failureMessage -Transaction $transaction
 }
-
-$results | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $output 'qa-results.json')
-$passed=@($results|Where-Object status -eq 'passed'); $failed=@($results|Where-Object status -eq 'failed'); $blocked=@($results|Where-Object status -eq 'blocked'); $skipped=@($results|Where-Object status -eq 'skipped')
-$summary=@('# Windows QA summary','',"- Mode: $Mode","- Generated UTC: $([DateTime]::UtcNow.ToString('o'))",'',"## A. 自动验证通过 ($($passed.Count))",'') + @($passed|ForEach-Object{"- $($_.name)"}) + @('',"## B. 自动验证失败 ($($failed.Count))",'') + @($failed|ForEach-Object{"- $($_.name): $($_.details)"}) + @('',"## C. 被权限或环境阻止 ($($blocked.Count))",'') + @($blocked|ForEach-Object{"- $($_.name): $($_.details)"}) + @('','## D. 必须人工执行','', '- 真实 Windows 10/11、真实多显示器与 DPI、睡眠唤醒、SmartScreen、托盘界面操作、8 小时性能测试。','',"## E. 未执行 ($($skipped.Count))",'') + @($skipped|ForEach-Object{"- $($_.name): $($_.details)"})
-($summary -join [Environment]::NewLine) | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $output 'qa-summary.md')
 Write-Host "QA report written to: $output"
-if ($failed.Count) { exit 2 }
+if ($exitCode -ne 0 -or @($results | Where-Object status -eq 'failed').Count) { exit 2 }
