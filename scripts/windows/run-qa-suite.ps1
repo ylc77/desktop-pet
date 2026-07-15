@@ -91,4 +91,3 @@ $summary=@('# Windows QA summary','',"- Mode: $Mode","- Generated UTC: $([DateTi
 ($summary -join [Environment]::NewLine) | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $output 'qa-summary.md')
 Write-Host "QA report written to: $output"
 if ($failed.Count) { exit 2 }
-
