@@ -2,6 +2,7 @@
 param(
     [ValidateSet('Safe','CurrentMachine','CleanEnvironment')][string]$Mode = 'Safe',
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\qa-results'),
+    [string]$InstallerPath,
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SkipPerformance,
@@ -15,7 +16,7 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if ($ResumeFromPhase -ne 'Beginning' -and $Mode -ne 'CurrentMachine') { throw '-ResumeFromPhase Uninstallation requires -Mode CurrentMachine.' }
 if ($WhatIfPreference -and $ResumeFromPhase -eq 'Beginning') {
-    Write-Host "QA suite preview: Mode=$Mode; OutputDirectory=$output; SkipBuild=$SkipBuild; SkipInstall=$SkipInstall; SkipPerformance=$SkipPerformance; ResumeFromPhase=$ResumeFromPhase"
+    Write-Host "QA suite preview: Mode=$Mode; OutputDirectory=$output; InstallerPath=$(if($InstallerPath){Split-Path $InstallerPath -Leaf}else{'auto'}); SkipBuild=$SkipBuild; SkipInstall=$SkipInstall; SkipPerformance=$SkipPerformance; ResumeFromPhase=$ResumeFromPhase"
     Write-Host 'Safe checks would run first. CurrentMachine/CleanEnvironment would additionally request confirmation before install, launch, normal-exit wait, autostart inspection, uninstall, and leftover checks.'
     exit 0
 }
@@ -162,7 +163,7 @@ try {
             Add-Result 'Install lifecycle' 'manual' 'skipped' '' 'Skipped by -SkipInstall.'
         } elseif ($PSCmdlet.ShouldProcess('Current Windows user profile', ($actions -join '; '))) {
             $currentPhase = 'installer-selection'
-            $installer = Get-ChildItem (Join-Path $repo 'release') -Filter '*setup.exe' -File | Select-Object -First 1
+            $installer = if ($InstallerPath) { Get-Item -LiteralPath (Resolve-Path -LiteralPath $InstallerPath).Path } else { Get-ChildItem (Join-Path $repo 'release') -Filter '*setup.exe' -File | Select-Object -First 1 }
             if (-not $installer) { throw 'No current NSIS installer was found.' }
             $currentPhase = 'installation'
             Assert-QACommand 'Install application' "& .\scripts\windows\install-smoke-test.ps1 -InstallerPath '$($installer.FullName.Replace("'", "''"))' -Confirm:`$false"

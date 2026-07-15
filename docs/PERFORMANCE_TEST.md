@@ -14,7 +14,9 @@
 
 ```powershell
 .\scripts\windows\monitor-process.ps1 -DurationMinutes 480 -IntervalSeconds 60 -OutputPath .\qa-results\performance\eight-hour.csv
-.\scripts\windows\analyze-performance.ps1 -InputPath .\qa-results\performance\eight-hour.csv -OutputPath .\qa-results\performance\eight-hour-summary.md
+.\scripts\windows\analyze-performance.ps1 -InputPath .\qa-results\performance\eight-hour.csv `
+  -OutputPath .\qa-results\performance\performance-summary.md `
+  -JsonOutputPath .\qa-results\performance\performance-analysis.json
 ```
 
 短时自动采样可使用 10–15 分钟；界面循环仍需 Computer Use 或测试者实际操作：
@@ -46,3 +48,5 @@
 - 出现增长时结合操作时间点排查定时器、事件监听器、图片预加载对象和 WebView2 进程。
 
 报告必须注明采样时长、系统版本、CPU、内存、显示器/DPI、安装包 SHA-256 和实际执行的阶段。未完成 8 小时采样时不得写“8 小时测试通过”。
+
+公开测试版标准输出目录为 `qa-results/public-beta/performance/`，其中包含 `performance.csv`、`performance-summary.md` 和 `performance-analysis.json`。分析脚本只计算区间、初始值、峰值、结束值和增量；即使 CSV 覆盖 8 小时，状态仍为 `requires_manual_review`，必须结合交互记录、日志轮转、卡顿观察和退出后进程归零后人工判定。

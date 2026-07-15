@@ -46,6 +46,15 @@ Safe 模式只执行非破坏性构建、测试、哈希、签名状态、清单
 
 ## Release 可追溯信息
 
+公开测试版总控与审核：
+
+```powershell
+.\scripts\windows\run-public-beta-qa.ps1 -Mode Safe
+.\scripts\windows\run-public-beta-qa.ps1 -Mode PublicBetaAudit
+```
+
+环境结果独立保存在 `qa-results/public-beta/<environment-id>/environment-result.json`。审核脚本读取每个检查的实际状态和证据，不会因为文件存在就自动判定通过。只有 Gate 真正满足后才可准备 `release/public-beta`；当前不得仅改文件名或提前创建 `beta.1` 标签。
+
 成功构建并完成测试后运行：
 
 ```powershell

@@ -1,0 +1,227 @@
+[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+param(
+    [ValidateSet('Safe','CurrentMachine','Sandbox','CleanWindows11','CleanWindows10','Upgrade','Performance','PublicBetaAudit')][string]$Mode = 'PublicBetaAudit',
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\qa-results\public-beta'),
+    [string]$InstallerPath,
+    [string]$PreviousInstallerPath,
+    [switch]$SkipBuild,
+    [switch]$SkipPerformance
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\common.ps1"
+. "$PSScriptRoot\public-beta-common.ps1"
+$repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
+$output = [System.IO.Path]::GetFullPath($OutputDirectory)
+$commit = (& git -C $repo rev-parse HEAD).Trim()
+$command = ".\scripts\windows\run-public-beta-qa.ps1 -Mode $Mode -OutputDirectory .\qa-results\public-beta"
+if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) { $command += " -InstallerPath '.\release\$(Split-Path $InstallerPath -Leaf)'" }
+if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) { $command += " -PreviousInstallerPath '<previous>\$(Split-Path $PreviousInstallerPath -Leaf)'" }
+if ($SkipBuild) { $command += ' -SkipBuild' }
+if ($SkipPerformance) { $command += ' -SkipPerformance' }
+$hostFacts = Get-PublicBetaHostFacts
+
+if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
+    $candidate = Get-ChildItem -LiteralPath ([System.IO.Path]::Combine($repo, 'release')) -Filter '*setup.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($candidate) { $InstallerPath = $candidate.FullName }
+}
+function Save-EnvironmentResult([string]$EnvironmentId, [string]$Status, [object[]]$Checks, [string[]]$Notes) {
+    $currentArtifactFacts = Get-PublicBetaArtifactFacts $InstallerPath
+    $result = New-PublicBetaEnvironmentResult -EnvironmentId $EnvironmentId -Mode $Mode -Status $Status -GitCommit $commit -Command $command -HostFacts $hostFacts -ArtifactFacts $currentArtifactFacts -Checks $Checks -Notes $Notes
+    $directory = [System.IO.Path]::Combine($output, $EnvironmentId)
+    if ($WhatIfPreference) {
+        Write-Host "Would write environment result: $([System.IO.Path]::Combine($directory, 'environment-result.json'))"
+        return
+    }
+    $path = Write-PublicBetaEnvironmentResult -Result $result -Directory $directory
+    Write-Host "Environment result: $path"
+}
+
+function Read-ResultRows([string]$Path) {
+    if (-not [System.IO.File]::Exists($Path)) { return @() }
+    $parsed = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    return @($parsed)
+}
+
+if ($Mode -eq 'PublicBetaAudit') {
+    & "$PSScriptRoot\audit-public-beta-readiness.ps1" -ResultsRoot $output -OutputDirectory $output
+    exit $LASTEXITCODE
+}
+
+if ($Mode -eq 'Safe') {
+    $environmentId = 'current-machine-safe'
+    if ($WhatIfPreference) {
+        & "$PSScriptRoot\run-qa-suite.ps1" -Mode Safe -OutputDirectory ([System.IO.Path]::Combine($output, $environmentId, 'raw')) -SkipBuild:$SkipBuild -WhatIf
+        exit $LASTEXITCODE
+    }
+    $raw = [System.IO.Path]::Combine($output, $environmentId, 'raw')
+    & "$PSScriptRoot\run-qa-suite.ps1" -Mode Safe -OutputDirectory $raw -SkipBuild:$SkipBuild
+    $exitCode = $LASTEXITCODE
+    $rows = @()
+    if ([System.IO.File]::Exists([System.IO.Path]::Combine($raw, 'qa-results.json'))) {
+        $parsedRows = Get-Content -LiteralPath ([System.IO.Path]::Combine($raw, 'qa-results.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($parsedRow in $parsedRows) { $rows += $parsedRow }
+    }
+    $failed = @($rows | Where-Object status -eq 'failed')
+    $documentationChecks = @(
+        # Keep source literals ASCII-only so Windows PowerShell 5.1 does not depend on the active ANSI code page.
+        @{ path='docs\PUBLIC_BETA_RELEASE_NOTES.md'; pattern='NOT_READY' }, @{ path='docs\KNOWN_ISSUES.md'; pattern='NotSigned' },
+        @{ path='docs\PRIVACY.md'; pattern='WebView2 Runtime' }, @{ path='docs\INSTALLATION.md'; pattern='SHA256' },
+        @{ path='docs\UNINSTALLATION.md'; pattern='APPDATA' }, @{ path='docs\TROUBLESHOOTING.md'; pattern='WebView2' },
+        @{ path='docs\SYSTEM_REQUIREMENTS.md'; pattern='x64' }
+    )
+    $documentationFailures = @($documentationChecks | Where-Object {
+        $documentPath = [System.IO.Path]::Combine($repo, [string]$_.path)
+        $documentExists = [System.IO.File]::Exists($documentPath)
+        $documentMatches = $documentExists -and [System.IO.File]::ReadAllText($documentPath, [System.Text.Encoding]::UTF8).Contains([string]$_.pattern)
+        -not $documentMatches
+    })
+    $documentationFailureNames = @($documentationFailures | ForEach-Object { [string]$_.path })
+    $defender = Get-MpComputerStatus -ErrorAction SilentlyContinue
+    $defenderStatus = if ($defender -and $defender.AntivirusEnabled -and $defender.RealTimeProtectionEnabled) { 'not_executed' } else { 'blocked' }
+    $checks = @(
+        [pscustomobject]@{ requirementId='automatic-release'; status=$(if ($exitCode -eq 0 -and -not $failed.Count) {'passed'}else{'failed'}); details="rawChecks=$($rows.Count); failures=$($failed.Count); exitCode=$exitCode" },
+        [pscustomobject]@{ requirementId='manifest-hash'; status=$(if (@($rows | Where-Object { $_.name -eq 'Signature, hash and manifest verification' -and $_.status -eq 'passed' }).Count) {'passed'}else{'failed'}); details='Read from Safe QA verification result.' },
+        [pscustomobject]@{ requirementId='public-docs'; status=$(if ($documentationFailures.Count) {'failed'}else{'passed'}); details="contentChecks=$($documentationChecks.Count); failures=$($documentationFailures.Count); files=$($documentationFailureNames -join ',')" },
+        [pscustomobject]@{ requirementId='defender'; status=$defenderStatus; details="antivirusEnabled=$(if($defender){$defender.AntivirusEnabled}else{'unknown'}); realTimeProtection=$(if($defender){$defender.RealTimeProtectionEnabled}else{'unknown'}); no scan was started" }
+    )
+    $safeFailed = $failed.Count -or $exitCode -ne 0 -or $documentationFailures.Count
+    Save-EnvironmentResult $environmentId $(if ($safeFailed) {'failed'}else{'passed'}) $checks @('This is an automated current-host result; it is not a clean Windows or hardware result.')
+    exit $(if ($safeFailed) { 2 } else { 0 })
+}
+
+if ($Mode -eq 'CurrentMachine') {
+    $environmentId = 'current-machine'
+    $raw = [System.IO.Path]::Combine($output, $environmentId, 'raw')
+    if ($WhatIfPreference) {
+        & "$PSScriptRoot\run-qa-suite.ps1" -Mode CurrentMachine -OutputDirectory $raw -InstallerPath $InstallerPath -SkipBuild:$SkipBuild -SkipPerformance:$SkipPerformance -WhatIf
+        exit $LASTEXITCODE
+    }
+    if (-not $PSCmdlet.ShouldProcess('Current Windows user profile', 'Run install, launch, normal-exit, and uninstall QA')) { exit 0 }
+    $exitCode = 1
+    $invocationError = $null
+    try {
+        & "$PSScriptRoot\run-qa-suite.ps1" -Mode CurrentMachine -OutputDirectory $raw -InstallerPath $InstallerPath -SkipBuild:$SkipBuild -SkipPerformance:$SkipPerformance -Confirm:$false
+        $exitCode = $LASTEXITCODE
+    } catch {
+        $invocationError = $_.Exception.Message
+    }
+    $rows = @(Read-ResultRows ([System.IO.Path]::Combine($raw, 'qa-results.json')))
+    $lifecycleFailures = @($rows | Where-Object { $_.status -eq 'failed' -and $_.category -in @('current-machine', 'transaction') })
+    $installPassed = @($rows | Where-Object { $_.name -eq 'Install application' -and $_.status -eq 'passed' }).Count -gt 0
+    $uninstallPassed = @($rows | Where-Object { $_.name -eq 'Uninstall application' -and $_.status -eq 'passed' }).Count -gt 0
+    $lifecycleStatus = if ($lifecycleFailures.Count -or $invocationError -or $exitCode -ne 0) { 'failed' } elseif ($installPassed -and $uninstallPassed) { 'passed' } else { 'not_executed' }
+    $singleInstanceStatus = if (@($rows | Where-Object { $_.name -eq 'Single instance and normal exit' -and $_.status -eq 'passed' }).Count) { 'passed' } elseif (@($rows | Where-Object { $_.name -eq 'Single instance and normal exit' -and $_.status -eq 'failed' }).Count) { 'failed' } else { 'not_executed' }
+    $checks = @(
+        [pscustomobject]@{ requirementId='current-machine-lifecycle'; status=$lifecycleStatus; details="rawChecks=$($rows.Count); failures=$(@($lifecycleFailures | ForEach-Object name) -join ','); exitCode=$exitCode" },
+        [pscustomobject]@{ requirementId='single-instance'; status=$singleInstanceStatus; details='Derived from the real CurrentMachine launch and normal-exit check.' },
+        [pscustomobject]@{ requirementId='high-severity-clear'; status=$lifecycleStatus; details='The known high-priority lifecycle issue is cleared only by a complete passing rerun.' }
+    )
+    $environmentStatus = if ($lifecycleStatus -eq 'failed' -or $singleInstanceStatus -eq 'failed') { 'failed' } elseif ($lifecycleStatus -eq 'passed') { 'passed' } else { 'not_executed' }
+    $notes = @('This mode changes the current user installation and requires explicit confirmation.')
+    if ($invocationError) { $notes += "Invocation error: $invocationError" }
+    Save-EnvironmentResult $environmentId $environmentStatus $checks $notes
+    exit $(if ($environmentStatus -eq 'failed') { 2 } else { 0 })
+}
+
+if ($Mode -eq 'Sandbox') {
+    $detected = & "$PSScriptRoot\detect-test-environments.ps1" | ConvertFrom-Json
+    $wsb = [System.IO.Path]::Combine($PSScriptRoot, 'sandbox', 'DeskPetQA.wsb')
+    $inputExists = [System.IO.Directory]::Exists('C:\DeskPetQA\Input')
+    $resultsExists = [System.IO.Directory]::Exists('C:\DeskPetQA\Results')
+    $enabled = [string]$detected.sandbox.state -eq 'Enabled'
+    $sandboxStatus = if ($enabled) { 'not_executed' } else { 'blocked' }
+    $checks = @(
+        [pscustomobject]@{ requirementId='clean-windows-11'; status=$sandboxStatus; details="sandboxState=$($detected.sandbox.state); wsbExists=$([System.IO.File]::Exists($wsb)); inputExists=$inputExists; resultsExists=$resultsExists" },
+        [pscustomobject]@{ requirementId='webview2-online'; status=$sandboxStatus; details='Requires a disposable environment with WebView2 absent and networking enabled.' },
+        [pscustomobject]@{ requirementId='webview2-offline'; status=$sandboxStatus; details='Requires a disposable environment with WebView2 absent and networking disabled.' }
+    )
+    $notes = if ($enabled) { @('Sandbox is enabled but was not started. User confirmation is required before launch.') } else { @('Windows Sandbox is disabled. It was not enabled and no restart was requested.') }
+    Save-EnvironmentResult 'windows-sandbox' $(if ($enabled) {'not_executed'}else{'blocked'}) $checks $notes
+    exit 0
+}
+
+if ($Mode -in @('CleanWindows10','CleanWindows11')) {
+    $detected = & "$PSScriptRoot\detect-test-environments.ps1" | ConvertFrom-Json
+    $vmCount = @($detected.hyperV.virtualMachines).Count
+    $requirementId = if ($Mode -eq 'CleanWindows10') { 'clean-windows-10' } else { 'clean-windows-11' }
+    $environmentId = if ($Mode -eq 'CleanWindows10') { 'windows-10' } else { 'windows-11' }
+    $details = "hyperVVMs=$vmCount; vmware=$($detected.vmware.commandAvailable); virtualBox=$($detected.virtualBox.commandAvailable)"
+    $checks = @([pscustomobject]@{ requirementId=$requirementId; status='blocked'; details=$details })
+    Save-EnvironmentResult $environmentId 'blocked' $checks @('No VM was started, created, snapshotted, restored, or modified. A matching clean VM must be supplied by the user.')
+    exit 0
+}
+
+if ($Mode -eq 'Upgrade') {
+    if ([string]::IsNullOrWhiteSpace($PreviousInstallerPath) -or [string]::IsNullOrWhiteSpace($InstallerPath)) {
+        $checks = @(
+            [pscustomobject]@{ requirementId='upgrade-0.1x'; status='blocked'; details='Both previous and current installers are required; same-version reinstall is rejected.' },
+            [pscustomobject]@{ requirementId='settings-migration'; status='blocked'; details='Blocked until a real previous-to-current upgrade can run.' },
+            [pscustomobject]@{ requirementId='no-duplicates'; status='blocked'; details='Blocked until a real previous-to-current upgrade can run.' }
+        )
+        Save-EnvironmentResult 'upgrade' 'blocked' $checks @('Supply two different 0.1.x installer artifacts and a disposable Windows environment. No installer was run.')
+        exit 0
+    }
+    $upgradeOutput = [System.IO.Path]::Combine($output, 'upgrade')
+    if ($WhatIfPreference) {
+        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -OutputDirectory $upgradeOutput -WhatIf
+        exit $LASTEXITCODE
+    }
+    if (-not $PSCmdlet.ShouldProcess('Explicit disposable Windows QA environment', 'Run real previous-to-current upgrade and uninstall')) { exit 0 }
+    $exitCode = 1
+    $invocationError = $null
+    try {
+        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -OutputDirectory $upgradeOutput -Confirm:$false
+        $exitCode = $LASTEXITCODE
+    } catch {
+        $invocationError = $_.Exception.Message
+    }
+    $upgradeResultPath = [System.IO.Path]::Combine($upgradeOutput, 'upgrade-result.json')
+    $upgradeResult = if ([System.IO.File]::Exists($upgradeResultPath)) { Get-Content -LiteralPath $upgradeResultPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+    $upgradePassed = $upgradeResult -and $upgradeResult.status -eq 'passed' -and $exitCode -eq 0 -and -not $invocationError
+    $settingsPassed = $upgradePassed -and @($upgradeResult.checks | Where-Object { $_.name -eq 'Settings preserved byte-for-byte' -and $_.passed }).Count -gt 0
+    $duplicatesPassed = $upgradePassed -and @($upgradeResult.checks | Where-Object { $_.name -in @('Single uninstall record', 'No duplicate autostart') -and $_.passed }).Count -eq 2
+    $checks = @(
+        [pscustomobject]@{ requirementId='upgrade-0.1x'; status=$(if($upgradePassed){'passed'}else{'failed'}); details="exitCode=$exitCode; reportPresent=$([bool]$upgradeResult)" },
+        [pscustomobject]@{ requirementId='settings-migration'; status=$(if($settingsPassed){'passed'}else{'failed'}); details='Requires a successful byte-for-byte settings preservation assertion.' },
+        [pscustomobject]@{ requirementId='no-duplicates'; status=$(if($duplicatesPassed){'passed'}else{'failed'}); details='Requires one uninstall record and no duplicate autostart entry.' }
+    )
+    $notes = @('Real upgrade mode is restricted to an explicitly designated disposable environment.')
+    if ($invocationError) { $notes += "Invocation error: $invocationError" }
+    Save-EnvironmentResult 'upgrade' $(if($upgradePassed -and $settingsPassed -and $duplicatesPassed){'passed'}else{'failed'}) $checks $notes
+    exit $(if($upgradePassed -and $settingsPassed -and $duplicatesPassed){0}else{2})
+}
+
+if ($Mode -eq 'Performance') {
+    $performance = [System.IO.Path]::Combine($output, 'performance')
+    if ($SkipPerformance) { Write-Host 'Performance capture skipped by -SkipPerformance.'; exit 0 }
+    if ($WhatIfPreference) {
+        Write-Host "Would capture 15 minutes to $performance. This preview does not claim an eight-hour pass."
+        exit 0
+    }
+    if (-not $PSCmdlet.ShouldProcess('Current desk-pet-framework process', 'Capture 15 minutes of performance data')) { exit 0 }
+    [System.IO.Directory]::CreateDirectory($performance) | Out-Null
+    $csv = [System.IO.Path]::Combine($performance, 'performance.csv')
+    $exitCode = 1
+    $invocationError = $null
+    try {
+        & "$PSScriptRoot\monitor-process.ps1" -DurationMinutes 15 -IntervalSeconds 10 -OutputPath $csv
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            & "$PSScriptRoot\analyze-performance.ps1" -InputPath $csv -OutputPath ([System.IO.Path]::Combine($performance, 'performance-summary.md')) -JsonOutputPath ([System.IO.Path]::Combine($performance, 'performance-analysis.json'))
+            $exitCode = $LASTEXITCODE
+        }
+    } catch {
+        $invocationError = $_.Exception.Message
+    }
+    $capturePassed = $exitCode -eq 0 -and -not $invocationError
+    $checks = @(
+        [pscustomobject]@{ requirementId='performance-short'; status=$(if($capturePassed){'passed'}else{'failed'}); details="15-minute capture; exitCode=$exitCode" },
+        [pscustomobject]@{ requirementId='stability-8h'; status='not_executed'; details='A 15-minute capture does not satisfy the eight-hour requirement.' }
+    )
+    $notes = @('Review trends and responsiveness manually; capture duration alone is not a stability pass.')
+    if ($invocationError) { $notes += "Invocation error: $invocationError" }
+    Save-EnvironmentResult 'performance' $(if($capturePassed){'passed'}else{'failed'}) $checks $notes
+    exit $(if($capturePassed){0}else{2})
+}

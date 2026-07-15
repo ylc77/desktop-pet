@@ -16,6 +16,10 @@ describe("release engineering safeguards", () => {
     const wrapper = readFileSync(resolve(root, "scripts/build-release.ps1"), "utf8");
     expect(wrapper).toContain("Get-Command $commandName");
     expect(wrapper).not.toMatch(/C:\\Users\\[^%]/i);
+
+    const manifestScript = readFileSync(resolve(root, "scripts/create-release-manifest.ps1"), "utf8");
+    expect(manifestScript).toContain("git -C $repo status --porcelain --untracked-files=normal");
+    expect(manifestScript).not.toMatch(/--untracked-files=no(?:\s|$)/);
   });
 
   it("limits native log files and atomically replaces settings", () => {

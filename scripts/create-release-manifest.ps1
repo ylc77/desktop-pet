@@ -14,7 +14,7 @@ $tauri = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repo 'src-taur
 $character = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repo 'public\characters\_placeholder\manifest.json') | ConvertFrom-Json
 $hash = Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256
 $commit = (& git -C $repo rev-parse HEAD 2>$null)
-$dirty = [bool](& git -C $repo status --porcelain --untracked-files=no)
+$dirty = [bool](& git -C $repo status --porcelain --untracked-files=normal)
 $nodeVersion = (& node --version).Trim()
 $rustVersion = (& rustc --version).Trim()
 $tauriVersion = [string]$package.devDependencies.'@tauri-apps/cli'
