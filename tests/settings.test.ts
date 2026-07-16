@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appSettingsSchema, DEFAULT_SETTINGS } from "../src/core/settings/settingsSchema";
+import { appSettingsSchema, DEFAULT_SETTINGS, resetSettingsPreservingCharacter } from "../src/core/settings/settingsSchema";
 import { parseSettings } from "../src/core/settings/settingsStore";
 
 describe("settings schema", () => {
@@ -16,6 +16,33 @@ describe("settings schema", () => {
     expect(result.recovered).toBe(false);
     expect(result.settings.position).toEqual({ x: 999999, y: -999999 });
     expect(result.settings.opacity).toBe(DEFAULT_SETTINGS.opacity);
+    expect(result.settings.automaticUpdateChecks).toBe(true);
+    expect(result.settings.updateLastCheckAt).toBeNull();
+  });
+  it("round-trips updater preferences", () => {
+    const settings = appSettingsSchema.parse({
+      ...DEFAULT_SETTINGS,
+      automaticUpdateChecks: false,
+      updateLastCheckAt: "2026-07-16T00:00:00Z",
+      updateSkippedVersion: "0.2.0-beta.1",
+      updateLastFailureCategory: "timeout",
+    });
+    expect(settings).toMatchObject({ automaticUpdateChecks: false, updateSkippedVersion: "0.2.0-beta.1", updateLastFailureCategory: "timeout" });
+  });
+  it("reset preserves the selected character but clears updater and runtime preferences", () => {
+    const reset = resetSettingsPreservingCharacter({
+      ...DEFAULT_SETTINGS,
+      characterId: "personal-pet",
+      skinId: "blue",
+      scale: 2,
+      automaticUpdateChecks: false,
+      updateSkippedVersion: "0.2.0-beta.1",
+    });
+    expect(reset.characterId).toBe("personal-pet");
+    expect(reset.skinId).toBe("blue");
+    expect(reset.scale).toBe(DEFAULT_SETTINGS.scale);
+    expect(reset.automaticUpdateChecks).toBe(true);
+    expect(reset.updateSkippedVersion).toBeNull();
   });
   it("accepts finite off-screen coordinates for the native recovery layer", () => {
     expect(appSettingsSchema.parse({ ...DEFAULT_SETTINGS, position: { x: -100000, y: 100000 } }).position).toEqual({ x: -100000, y: 100000 });

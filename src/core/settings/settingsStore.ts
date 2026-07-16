@@ -53,3 +53,11 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   if (!isTauriRuntime()) return;
   try { await invoke("write_settings_file", { settings: valid }); } catch (error) { log("warn", "保存 Tauri 设置失败，已保存在本地存储", error); }
 }
+
+export async function saveSettingsStrict(settings: AppSettings): Promise<void> {
+  const valid = appSettingsSchema.parse(settings);
+  if (isTauriRuntime()) {
+    await invoke("write_settings_file", { settings: valid });
+  }
+  localStorage.setItem(STORE_KEY, JSON.stringify(valid));
+}

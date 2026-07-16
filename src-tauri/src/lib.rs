@@ -1,4 +1,6 @@
 mod character_catalog;
+mod diagnostics;
+mod updater;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -254,6 +256,16 @@ fn set_fullscreen_auto_hide(enabled: bool, state: tauri::State<'_, FullscreenMon
 #[tauri::command]
 fn quit_app<R: Runtime>(app: AppHandle<R>) {
     app.exit(0);
+}
+
+#[tauri::command]
+fn flush_application_logs() {
+    log::logger().flush();
+}
+
+#[tauri::command]
+fn restore_main_window<R: Runtime>(app: AppHandle<R>) {
+    show_main(&app, VisibilityReason::TrayReset);
 }
 
 #[cfg(windows)]
@@ -997,6 +1009,8 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let autostart = MenuItem::with_id(app, "toggle-autostart", "切换开机启动", true, None::<&str>)?;
     let character = MenuItem::with_id(app, "character", "切换角色 / 皮肤", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let check_updates = MenuItem::with_id(app, "check-updates", "检查更新", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", "关于七酱桌宠", true, None::<&str>)?;
     let reload = MenuItem::with_id(app, "reload", "重新加载角色资源", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset", "恢复默认位置", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "临时隐藏", true, None::<&str>)?;
@@ -1005,8 +1019,20 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &pause, &size, &opacity, &top, &autostart, &character, &settings, &reload, &reset,
-            &hide, &separator, &quit,
+            &pause,
+            &size,
+            &opacity,
+            &top,
+            &autostart,
+            &character,
+            &settings,
+            &check_updates,
+            &about,
+            &reload,
+            &reset,
+            &hide,
+            &separator,
+            &quit,
         ],
     )?;
 
@@ -1061,9 +1087,12 @@ pub fn run() {
         .manage(SettingsFileLock::default())
         .manage(character_catalog::CharacterCatalogLock::default())
         .manage(character_catalog::ActiveCharacterState::default())
+        .manage(updater::UpdaterState::default())
         .invoke_handler(tauri::generate_handler![
             set_fullscreen_auto_hide,
             quit_app,
+            flush_application_logs,
+            restore_main_window,
             read_settings_file,
             write_settings_file,
             quarantine_invalid_settings_file,
@@ -1078,7 +1107,14 @@ pub fn run() {
             character_catalog::finalize_character_selection,
             character_catalog::cancel_character_selection,
             character_catalog::request_character_selection,
-            character_catalog::show_appearance_window
+            character_catalog::show_appearance_window,
+            updater::get_updater_configuration,
+            updater::check_for_update,
+            updater::download_update,
+            updater::install_update,
+            updater::cancel_pending_update,
+            diagnostics::open_log_directory,
+            diagnostics::export_diagnostics
         ])
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app, VisibilityReason::SingleInstance)
@@ -1091,6 +1127,8 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,

@@ -7,6 +7,7 @@ import { PetCanvas } from "../components/PetCanvas/PetCanvas";
 import { ContextMenu } from "../components/ContextMenu/ContextMenu";
 import { DeveloperPanel } from "../components/DeveloperPanel/DeveloperPanel";
 import { SettingsPanel } from "../components/SettingsPanel/SettingsPanel";
+import { AboutPanel } from "../components/AboutPanel/AboutPanel";
 import type { PreparedCharacter } from "../core/character/CharacterLoader";
 import {
   isSelectionRequestExpired,
@@ -20,10 +21,13 @@ import {
 } from "../core/character/CharacterCatalog";
 import type { AnimationState, LoadedCharacter } from "../core/character/types";
 import { validateManifest } from "../core/character/CharacterValidator";
-import { DEFAULT_SETTINGS, DEVELOPER_TOOLS_ALLOWED, type AppSettings } from "../core/settings/settingsSchema";
-import { loadSettings, parseSettings, saveSettings } from "../core/settings/settingsStore";
+import { DEFAULT_SETTINGS, DEVELOPER_TOOLS_ALLOWED, resetSettingsPreservingCharacter, type AppSettings } from "../core/settings/settingsSchema";
+import { loadSettings, parseSettings, saveSettings, saveSettingsStrict } from "../core/settings/settingsStore";
 import { closeApp, hideWindow, isTauriRuntime, restoreWindowPosition, saveWindowPosition, setAlwaysOnTop } from "../core/window/windowController";
 import { log } from "../core/diagnostics/logger";
+import { createNativeUpdaterClient } from "../core/updater/nativeUpdaterClient";
+import { shouldRunAutomaticCheck, startupCheckDelayMs } from "../core/updater/updaterPolicy";
+import { UpdaterStore } from "../core/updater/updaterStore";
 import { useAnimationPlayer } from "../hooks/useAnimationPlayer";
 import { usePetMotion } from "../hooks/usePetMotion";
 
@@ -76,6 +80,9 @@ export default function App() {
   const [frameLoad, setFrameLoad] = useState({ status: "loading", loaded: 0, failed: 0, generation: 0 });
   const [reloadKey, setReloadKey] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [updateSuspended, setUpdateSuspended] = useState(false);
+  const [updaterStore] = useState(() => new UpdaterStore(createNativeUpdaterClient()));
   const [ready, setReady] = useState(false);
   const [windowVisible, setWindowVisible] = useState(true);
   const [appearanceFeedback, setAppearanceFeedback] = useState<string | null>(null);
@@ -319,6 +326,64 @@ export default function App() {
   }, [settings.autostart, ready]);
 
   useEffect(() => {
+    let lastTransition: unknown = null;
+    return updaterStore.subscribe(() => {
+      const snapshot = updaterStore.getSnapshot();
+      const suspended = snapshot.status === "installing" || snapshot.status === "restarting";
+      setUpdateSuspended((current) => current === suspended ? current : suspended);
+      const transition = snapshot.transitions.at(-1);
+      if (!transition || transition === lastTransition) return;
+      lastTransition = transition;
+      if (transition.from === "checking") {
+        setSettings((current) => ({
+          ...current,
+          updateLastCheckAt: transition.at,
+          updateLastAvailableVersion: snapshot.update?.version ?? null,
+        }));
+      }
+      if (snapshot.status === "error") {
+        setSettings((current) => ({
+          ...current,
+          updateLastFailureCategory: snapshot.error?.category ?? "unknown",
+        }));
+        log("warn", snapshot.reason, snapshot.error?.message);
+      } else if (["upToDate", "available", "readyToInstall", "restarting"].includes(snapshot.status)) {
+        setSettings((current) => current.updateLastFailureCategory === null ? current : {
+          ...current,
+          updateLastFailureCategory: null,
+        });
+      }
+    });
+  }, [updaterStore]);
+
+  useEffect(() => {
+    if (!ready) return;
+    let active = true;
+    let timer: number | null = null;
+    void updaterStore.initialize().then(() => {
+      if (!active) return;
+      const configuration = updaterStore.getSnapshot().configuration;
+      if (settings.pendingUpdateVersion && configuration) {
+        const installed = configuration.currentVersion === settings.pendingUpdateVersion;
+        if (!installed) log("warn", `更新完成确认未检测到目标版本 ${settings.pendingUpdateVersion}`);
+        setSettings((current) => ({
+          ...current,
+          pendingUpdateVersion: null,
+          lastConfirmedUpdateVersion: installed ? configuration.currentVersion : current.lastConfirmedUpdateVersion,
+        }));
+      }
+      if (!configuration?.configured || !settings.automaticUpdateChecks || !shouldRunAutomaticCheck(settings.updateLastCheckAt)) return;
+      timer = window.setTimeout(() => {
+        if (active) void updaterStore.check({ manual: false, skippedVersion: settings.updateSkippedVersion });
+      }, startupCheckDelayMs());
+    });
+    return () => {
+      active = false;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [ready, settings.automaticUpdateChecks, settings.pendingUpdateVersion, settings.updateLastCheckAt, settings.updateSkippedVersion, updaterStore]);
+
+  useEffect(() => {
     if (!isTauriRuntime() || !ready) return;
     const unlisteners: (() => void)[] = [];
     let disposed = false;
@@ -342,8 +407,10 @@ export default function App() {
       if (action === "opacity-half") setSettings((current) => ({ ...current, opacity: 0.5 }));
       if (action === "opacity-full") setSettings((current) => ({ ...current, opacity: 1 }));
       if (action === "character") void invoke("show_appearance_window").catch((error) => log("warn", "打开外观中心失败", error));
-      if (action === "settings") { setSettingsOpen(true); setSettings((current) => ({ ...current, developerPanel: false })); }
-      if (action === "developer" && DEVELOPER_TOOLS_ALLOWED) { setSettingsOpen(false); setSettings((current) => ({ ...current, developerPanel: !current.developerPanel })); }
+      if (action === "settings") { setAboutOpen(false); setSettingsOpen(true); setSettings((current) => ({ ...current, developerPanel: false })); }
+      if (action === "about") { setSettingsOpen(false); setAboutOpen(true); setSettings((current) => ({ ...current, developerPanel: false })); }
+      if (action === "check-updates") { setSettingsOpen(false); setAboutOpen(true); void updaterStore.check({ manual: true }); }
+      if (action === "developer" && DEVELOPER_TOOLS_ALLOWED) { setSettingsOpen(false); setAboutOpen(false); setSettings((current) => ({ ...current, developerPanel: !current.developerPanel })); }
       if (action === "reload") setReloadKey((value) => value + 1);
     }));
     register(listen<CharacterSelectionRequest>("character-selection-requested", (event) => {
@@ -355,9 +422,37 @@ export default function App() {
       if (positionTimer !== null) window.clearTimeout(positionTimer);
       unlisteners.forEach((fn) => fn());
     };
-  }, [performSelection, ready]);
+  }, [performSelection, ready, updaterStore]);
 
   const patchSettings = useCallback((patch: Partial<AppSettings>) => setSettings((current) => ({ ...current, ...patch })), []);
+
+  const installUpdate = useCallback(async () => {
+    await updaterStore.install({
+      beforeInstall: async () => {
+        const targetVersion = updaterStore.getSnapshot().update?.version ?? null;
+        const position = isTauriRuntime() ? await saveWindowPosition() : settings.position;
+        const prepared = { ...settings, position: position ?? settings.position, pendingUpdateVersion: targetVersion };
+        setSettings(prepared);
+        try {
+          await saveSettingsStrict(prepared);
+          if (isTauriRuntime()) await invoke("flush_application_logs");
+        } catch (error) {
+          const cleared = { ...prepared, pendingUpdateVersion: null };
+          setSettings(cleared);
+          try { await saveSettingsStrict(cleared); }
+          catch (rollbackError) { log("warn", "更新准备失败后无法清理待确认版本", rollbackError); }
+          throw error;
+        }
+      },
+    });
+  }, [settings, updaterStore]);
+
+  const resetSettings = useCallback(async () => {
+    const reset = resetSettingsPreservingCharacter(settings);
+    await saveSettingsStrict(reset);
+    setSettings(reset);
+    if (isTauriRuntime()) await invoke("restore_main_window");
+  }, [settings]);
 
   if (!ready || !character) return <div className="loading">正在加载占位角色…</div>;
   return <RunningApp
@@ -373,6 +468,12 @@ export default function App() {
     onReload={() => setReloadKey((value) => value + 1)}
     settingsOpen={settingsOpen}
     onSettingsOpen={setSettingsOpen}
+    aboutOpen={aboutOpen}
+    onAboutOpen={setAboutOpen}
+    updaterStore={updaterStore}
+    updateSuspended={updateSuspended}
+    onInstallUpdate={installUpdate}
+    onResetSettings={resetSettings}
     appearanceFeedback={appearanceFeedback}
   />;
 }
@@ -390,10 +491,16 @@ interface RunningProps {
   onReload: () => void;
   settingsOpen: boolean;
   onSettingsOpen: (open: boolean) => void;
+  aboutOpen: boolean;
+  onAboutOpen: (open: boolean) => void;
+  updaterStore: UpdaterStore;
+  updateSuspended: boolean;
+  onInstallUpdate: () => Promise<void>;
+  onResetSettings: () => Promise<void>;
   appearanceFeedback: string | null;
 }
 
-function RunningApp({ character, settings, menu, cacheCount, frameLoad, windowVisible, onWindowVisible, onPatch, onMenu, onReload, settingsOpen, onSettingsOpen, appearanceFeedback }: RunningProps) {
+function RunningApp({ character, settings, menu, cacheCount, frameLoad, windowVisible, onWindowVisible, onPatch, onMenu, onReload, settingsOpen, onSettingsOpen, aboutOpen, onAboutOpen, updaterStore, updateSuspended, onInstallUpdate, onResetSettings, appearanceFeedback }: RunningProps) {
   const [showDebugBounds, setShowDebugBounds] = useState(false);
   const [simulateMissingFrame, setSimulateMissingFrame] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -403,7 +510,7 @@ function RunningApp({ character, settings, menu, cacheCount, frameLoad, windowVi
   const [inputDiagnostic, setInputDiagnostic] = useState({ event: "none", latencyMs: 0 });
   const [displayDiagnostic, setDisplayDiagnostic] = useState({ monitor: null as string | null, dpiScale: window.devicePixelRatio || 1 });
   const { machine, snapshot, animation, frameIndex, frame, diagnostics, stepFrame } = useAnimationPlayer(character, {
-    paused: settings.animationsPaused,
+    paused: settings.animationsPaused || updateSuspended,
     suspended: !windowVisible,
     playbackRate,
     ambientEnabled,
@@ -430,12 +537,14 @@ function RunningApp({ character, settings, menu, cacheCount, frameLoad, windowVi
     return () => { active = false; window.clearInterval(timer); };
   }, [settings.developerPanel]);
 
-  const action = async (name: "reload" | "reset" | "hide" | "quit" | "settings" | "developer" | "appearance") => {
+  const action = async (name: "reload" | "reset" | "hide" | "quit" | "settings" | "developer" | "appearance" | "check-updates" | "about") => {
     onMenu(null);
     if (name === "reload") onReload();
-    if (name === "settings") { onPatch({ developerPanel: false }); onSettingsOpen(true); }
+    if (name === "settings") { onPatch({ developerPanel: false }); onAboutOpen(false); onSettingsOpen(true); }
+    if (name === "about") { onPatch({ developerPanel: false }); onSettingsOpen(false); onAboutOpen(true); }
+    if (name === "check-updates") { onPatch({ developerPanel: false }); onSettingsOpen(false); onAboutOpen(true); await updaterStore.check({ manual: true }); }
     if (name === "appearance" && isTauriRuntime()) await invoke("show_appearance_window");
-    if (name === "developer" && DEVELOPER_TOOLS_ALLOWED) { onSettingsOpen(false); onPatch({ developerPanel: true }); }
+    if (name === "developer" && DEVELOPER_TOOLS_ALLOWED) { onSettingsOpen(false); onAboutOpen(false); onPatch({ developerPanel: true }); }
     if (name === "hide") {
       onWindowVisible(false);
       try {
@@ -457,7 +566,23 @@ function RunningApp({ character, settings, menu, cacheCount, frameLoad, windowVi
       <PetCanvas frame={frame} animation={animation} settings={settings} frameSize={character.manifest.frameSize} anchor={character.manifest.anchor} hitbox={character.manifest.hitbox} visual={character.manifest.visual} characterName={character.manifest.name} interactions={character.manifest.interactions} showDebugBounds={showDebugBounds} simulateMissingFrame={simulateMissingFrame} onState={transition} onInputDiagnostic={(event, latencyMs) => setInputDiagnostic({ event, latencyMs })} onContextMenu={onMenu} onFrameError={() => { setSimulateMissingFrame(false); log("warn", "检测到无法显示的动画帧，保留上一有效帧并回退到 idle"); transition("idle", "frame-error", true); }} />
       {menu && <ContextMenu position={menu} settings={settings} developerToolsAllowed={DEVELOPER_TOOLS_ALLOWED} onPatch={onPatch} onAction={(name) => void action(name).catch((error) => log("warn", "菜单操作失败", error))} onClose={() => onMenu(null)} />}
       {appearanceFeedback && <div className="pet-notice" role="status">{appearanceFeedback}</div>}
-      {settingsOpen && <SettingsPanel settings={settings} onPatch={onPatch} onClose={() => onSettingsOpen(false)} />}
+      {settingsOpen && <SettingsPanel
+        settings={settings}
+        onPatch={onPatch}
+        onCheckUpdates={() => void action("check-updates").catch((error) => log("warn", "检查更新失败", error))}
+        onAbout={() => void action("about")}
+        onReset={() => void onResetSettings().catch((error) => log("warn", "恢复默认设置失败", error))}
+        onClose={() => onSettingsOpen(false)}
+      />}
+      {aboutOpen && <AboutPanel
+        settings={settings}
+        character={character}
+        updaterStore={updaterStore}
+        onPatch={onPatch}
+        onInstall={onInstallUpdate}
+        onReset={onResetSettings}
+        onClose={() => onAboutOpen(false)}
+      />}
       {DEVELOPER_TOOLS_ALLOWED && settings.developerPanel && <DeveloperPanel
         character={character} snapshot={snapshot} animation={animation} frameIndex={frameIndex} cacheCount={cacheCount}
         frameLoad={frameLoad} diagnostics={diagnostics} motion={motion} display={displayDiagnostic} input={inputDiagnostic}

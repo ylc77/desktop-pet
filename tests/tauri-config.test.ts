@@ -8,8 +8,10 @@ describe("Tauri window capabilities", () => {
     permissions: string[];
   };
   const tauriConfig = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")) as {
+    bundle: { createUpdaterArtifacts: boolean };
     app: { security: { assetProtocol?: { enable: boolean; scope: { allow: string[]; deny?: string[] } } } };
   };
+  const updaterBuildConfig = JSON.parse(readFileSync("src-tauri/tauri.updater.conf.json", "utf8")) as { bundle: { createUpdaterArtifacts: boolean } };
 
   it.each([
     "core:window:allow-hide",
@@ -18,6 +20,21 @@ describe("Tauri window capabilities", () => {
     "core:window:allow-start-dragging",
   ])("grants the runtime operation %s", (permission) => {
     expect(capabilities.permissions).toContain(permission);
+  });
+
+  it("keeps ordinary builds unsigned while the dedicated updater build creates artifacts", () => {
+    expect(tauriConfig.bundle.createUpdaterArtifacts).toBe(false);
+    expect(updaterBuildConfig.bundle.createUpdaterArtifacts).toBe(true);
+  });
+
+  it("grants only restart plus controlled updater commands to the main window", () => {
+    expect(capabilities.permissions).toContain("process:allow-restart");
+    expect(capabilities.permissions).not.toContain("process:allow-exit");
+    expect(capabilities.permissions).not.toContain("updater:default");
+    expect(capabilities.permissions).toContain("allow-check-for-update");
+    expect(capabilities.permissions).toContain("allow-install-update");
+    expect(appearanceCapabilities.permissions).not.toContain("process:allow-restart");
+    expect(appearanceCapabilities.permissions).not.toContain("allow-check-for-update");
   });
 
   it("isolates the appearance center in its own minimal capability", () => {

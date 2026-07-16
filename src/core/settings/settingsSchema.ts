@@ -15,6 +15,17 @@ export const appSettingsSchema = z.object({
   developerPanel: z.boolean(),
   interactionsEnabled: z.boolean(),
   facing: z.enum(["left", "right"]),
+  automaticUpdateChecks: z.boolean(),
+  updateLastCheckAt: z.string().nullable(),
+  updateLastAvailableVersion: z.string().nullable(),
+  updateSkippedVersion: z.string().nullable(),
+  updateLastFailureCategory: z.enum([
+    "notConfigured", "offline", "timeout", "endpointNotFound", "invalidMetadata",
+    "invalidSignature", "downloadInterrupted", "permissionDenied", "installFailed",
+    "unsupported", "busy", "unknown",
+  ]).nullable(),
+  pendingUpdateVersion: z.string().nullable(),
+  lastConfirmedUpdateVersion: z.string().nullable(),
 });
 
 export type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -35,4 +46,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
   developerPanel: import.meta.env.DEV,
   interactionsEnabled: true,
   facing: "right",
+  automaticUpdateChecks: true,
+  updateLastCheckAt: null,
+  updateLastAvailableVersion: null,
+  updateSkippedVersion: null,
+  updateLastFailureCategory: null,
+  pendingUpdateVersion: null,
+  lastConfirmedUpdateVersion: null,
 };
+
+export function resetSettingsPreservingCharacter(current: AppSettings): AppSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    characterId: current.characterId,
+    skinId: current.skinId,
+  };
+}

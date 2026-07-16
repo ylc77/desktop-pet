@@ -13,6 +13,7 @@
     "core:window:allow-start-dragging",
     "autostart:default",
     "log:default",
+    "process:allow-restart",
     "allow-set-fullscreen-auto-hide",
     "allow-quit-app",
     "allow-read-settings-file",
@@ -25,6 +26,15 @@
     "allow-commit-character-selection",
     "allow-finalize-character-selection",
     "allow-cancel-character-selection",
-    "allow-show-appearance-window"
+    "allow-show-appearance-window",
+    "allow-get-updater-configuration",
+    "allow-check-for-update",
+    "allow-download-update",
+    "allow-install-update",
+    "allow-cancel-pending-update",
+    "allow-open-log-directory",
+    "allow-export-diagnostics",
+    "allow-flush-application-logs",
+    "allow-restore-main-window"
   ]
 }

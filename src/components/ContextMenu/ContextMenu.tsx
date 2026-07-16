@@ -5,7 +5,7 @@ interface Props {
   settings: AppSettings;
   developerToolsAllowed: boolean;
   onPatch: (patch: Partial<AppSettings>) => void;
-  onAction: (action: "reload" | "reset" | "hide" | "quit" | "settings" | "developer" | "appearance") => void;
+  onAction: (action: "reload" | "reset" | "hide" | "quit" | "settings" | "developer" | "appearance" | "check-updates" | "about") => void;
   onClose: () => void;
 }
 
@@ -29,6 +29,8 @@ export function ContextMenu({ position, settings, developerToolsAllowed, onPatch
         <button onClick={() => onPatch({ autostart: !settings.autostart })}>{settings.autostart ? "关闭开机启动" : "开启开机启动"}</button>
         <button onClick={() => onPatch({ facing: settings.facing === "left" ? "right" : "left" })}>朝向：{settings.facing === "left" ? "左" : "右"}</button>
         <button onClick={() => onAction("settings")}>设置</button>
+        <button onClick={() => onAction("check-updates")}>检查更新</button>
+        <button onClick={() => onAction("about")}>关于七酱桌宠</button>
         {developerToolsAllowed && <button onClick={() => onAction("developer")}>开发者面板</button>}
         <button onClick={() => onAction("reload")}>重新加载角色资源</button>
         <button onClick={() => onAction("reset")}>恢复默认位置</button>

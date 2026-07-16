@@ -27,9 +27,9 @@ button { color: inherit; }
 .context-menu label { display: grid; gap: 4px; }
 .context-menu select { width: 100%; }
 .context-menu .danger { color: #ff9b9b; }
-.developer-panel, .settings-panel { position: absolute; z-index: 10; top: 8px; right: 8px; width: min(310px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow: auto; padding: 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 13px; background: rgba(16, 20, 29, .92); box-shadow: 0 12px 30px rgba(0,0,0,.35); backdrop-filter: blur(14px); user-select: text; }
-.developer-panel header, .settings-panel header { display: flex; justify-content: space-between; align-items: center; }
-.developer-panel header button, .settings-panel header button { border: 0; background: transparent; font-size: 20px; }
+.developer-panel, .settings-panel, .about-panel { position: absolute; z-index: 10; top: 8px; right: 8px; width: min(340px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow: auto; padding: 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 13px; background: rgba(16, 20, 29, .94); box-shadow: 0 12px 30px rgba(0,0,0,.35); backdrop-filter: blur(14px); user-select: text; }
+.developer-panel header, .settings-panel header, .about-panel > header { display: flex; justify-content: space-between; align-items: center; }
+.developer-panel header button, .settings-panel header button, .about-panel > header button { border: 0; background: transparent; font-size: 20px; }
 .developer-panel dl { display: grid; grid-template-columns: 78px 1fr; gap: 3px 8px; margin: 10px 0; font-size: 12px; }
 .developer-panel dt { color: #9ca9c4; }
 .developer-panel dd { margin: 0; overflow-wrap: anywhere; }
@@ -37,6 +37,23 @@ button { color: inherit; }
 .settings-grid { display: grid; gap: 5px; margin: 8px 0; padding: 8px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; font-size: 11px; }
 .settings-grid label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .settings-grid input[type="range"] { width: 110px; }
+.panel-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.panel-actions button, .about-panel button { min-height: 29px; padding: 5px 8px; border: 1px solid rgba(255,255,255,.12); border-radius: 7px; background: rgba(255,255,255,.08); }
+.panel-actions button:hover:not(:disabled), .about-panel button:hover:not(:disabled) { background: rgba(120,145,255,.26); }
+.panel-actions button:disabled, .about-panel button:disabled { opacity: .5; }
+.about-scroll { max-height: calc(100vh - 60px); overflow-y: auto; padding-right: 2px; }
+.about-scroll h2 { margin: 10px 0 5px; font-size: 20px; }
+.about-scroll h3 { margin: 10px 0 5px; font-size: 13px; }
+.about-scroll p { margin: 5px 0; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.about-scroll details { margin-top: 8px; padding: 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; font-size: 11px; }
+.update-panel { margin-top: 10px; padding: 9px; border: 1px solid rgba(142,164,214,.24); border-radius: 9px; background: rgba(70,87,128,.16); }
+.panel-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.update-details { margin: 7px 0; }
+.update-notes { max-height: 88px; overflow-y: auto; white-space: pre-wrap; }
+.update-progress { display: grid; gap: 5px; margin-top: 8px; font-size: 10px; }
+.update-progress progress { width: 100%; }
+.update-error { color: #ffb2b2; }
+.about-actions { margin-top: 8px; }
 .trigger-grid button { padding: 5px 2px; border: 0; border-radius: 5px; background: #35405c; font-size: 11px; }
 .debug-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 7px; }
 .debug-actions button { padding: 5px; border: 0; border-radius: 5px; background: #293249; font-size: 10px; }
