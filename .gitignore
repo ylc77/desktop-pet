@@ -23,5 +23,7 @@ qa-results-*/
 *.p12
 *.pfx
 updater-secrets/
+updater-key-backups/
+.updater-key-backups/
 .updater-password*
 *.updater-signing-temp*

@@ -1,6 +1,6 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
-    [ValidateSet('Safe','CurrentMachine','Sandbox','CleanWindows11','CleanWindows10','Upgrade','Performance','PublicBetaAudit')][string]$Mode = 'PublicBetaAudit',
+    [ValidateSet('Safe','CurrentMachine','Sandbox','CleanWindows11','CleanWindows10','Upgrade','ApplicationUpdater','Performance','PublicBetaAudit')][string]$Mode = 'PublicBetaAudit',
     [string]$OutputDirectory,
     [string]$InstallerPath,
     [string]$PreviousInstallerPath,
@@ -9,6 +9,7 @@ param(
     [string]$UpdaterPublicKeyPath,
     [string]$ExpectedVersion,
     [switch]$UseExistingInstallation,
+    [switch]$UninstallAfterUpdate,
     [switch]$SkipBuild,
     [switch]$SkipPerformance
 )
@@ -36,6 +37,7 @@ if (-not [string]::IsNullOrWhiteSpace($UpdaterPublicKeyPath)) { $command += " -U
 if ($SkipBuild) { $command += ' -SkipBuild' }
 if ($SkipPerformance) { $command += ' -SkipPerformance' }
 if ($UseExistingInstallation) { $command += ' -UseExistingInstallation' }
+if ($UninstallAfterUpdate) { $command += ' -UninstallAfterUpdate' }
 $hostFacts = Get-PublicBetaHostFacts
 
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
@@ -45,10 +47,24 @@ if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
 $versionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $InstallerPath -ExplicitExpectedVersion $ExpectedVersion
 $ExpectedVersion = $versionContext.ExpectedVersion
 Assert-DeskPetVersionContext -VersionContext $versionContext
-function Save-EnvironmentResult([string]$EnvironmentId, [string]$Status, [object[]]$Checks, [string[]]$Notes) {
+function Save-EnvironmentResult {
+    param(
+        [Parameter(Mandatory)][string]$EnvironmentId,
+        [Parameter(Mandatory)][string]$Status,
+        [AllowEmptyCollection()][object[]]$Checks,
+        [AllowEmptyCollection()][string[]]$Notes,
+        [AllowNull()][string]$EvidenceType,
+        [AllowNull()][string]$SourceReportStatus,
+        [AllowNull()][string]$SourceReportFile,
+        [AllowNull()][string]$SourceReportSha256
+    )
     $currentArtifactFacts = Get-PublicBetaArtifactFacts $InstallerPath
     $result = New-PublicBetaEnvironmentResult -EnvironmentId $EnvironmentId -Mode $Mode -Status $Status -GitCommit $commit -Command $command -HostFacts $hostFacts -ArtifactFacts $currentArtifactFacts -Checks $Checks -Notes $Notes
     $result['expectedVersion'] = $ExpectedVersion
+    if (-not [string]::IsNullOrWhiteSpace($EvidenceType)) { $result['evidenceType'] = $EvidenceType }
+    if (-not [string]::IsNullOrWhiteSpace($SourceReportStatus)) { $result['sourceReportStatus'] = $SourceReportStatus }
+    if (-not [string]::IsNullOrWhiteSpace($SourceReportFile)) { $result['sourceReportFile'] = $SourceReportFile }
+    if (-not [string]::IsNullOrWhiteSpace($SourceReportSha256)) { $result['sourceReportSha256'] = $SourceReportSha256 }
     $directory = [System.IO.Path]::Combine($output, $EnvironmentId)
     if ($WhatIfPreference) {
         Write-Host "Would write environment result: $([System.IO.Path]::Combine($directory, 'environment-result.json'))"
@@ -184,7 +200,7 @@ if ($Mode -eq 'Upgrade') {
             [pscustomobject]@{ requirementId='settings-migration'; status='blocked'; details='Blocked until a real previous-to-current upgrade can run.' },
             [pscustomobject]@{ requirementId='no-duplicates'; status='blocked'; details='Blocked until a real previous-to-current upgrade can run.' }
         )
-        Save-EnvironmentResult 'upgrade' 'blocked' $checks @('Supply two different 0.1.x installer artifacts and a disposable Windows environment. No installer was run.')
+        Save-EnvironmentResult 'upgrade' 'blocked' $checks @('Supply two different installer artifacts and a disposable Windows environment. No installer was run.') -EvidenceType 'direct_installer_overlay' -SourceReportStatus 'not_executed'
         exit 0
     }
     $upgradeOutput = [System.IO.Path]::Combine($output, 'upgrade')
@@ -203,7 +219,8 @@ if ($Mode -eq 'Upgrade') {
     }
     $upgradeResultPath = [System.IO.Path]::Combine($upgradeOutput, 'upgrade-result.json')
     $upgradeResult = if ([System.IO.File]::Exists($upgradeResultPath)) { Get-Content -LiteralPath $upgradeResultPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
-    $upgradePassed = $upgradeResult -and $upgradeResult.status -eq 'passed' -and $exitCode -eq 0 -and -not $invocationError
+    $upgradeEvidenceType = if ($upgradeResult) { [string](Get-ObjectPropertyValue $upgradeResult 'evidenceType') } else { $null }
+    $upgradePassed = $upgradeResult -and $upgradeEvidenceType -eq 'direct_installer_overlay' -and $upgradeResult.status -eq 'passed' -and $exitCode -eq 0 -and -not $invocationError
     $settingsPassed = $upgradePassed -and @($upgradeResult.checks | Where-Object { $_.name -eq 'Settings preserved byte-for-byte' -and $_.passed }).Count -gt 0
     $duplicatesPassed = $upgradePassed -and @($upgradeResult.checks | Where-Object { $_.name -in @('Single uninstall record', 'No duplicate autostart') -and $_.passed }).Count -eq 2
     $checks = @(
@@ -211,10 +228,106 @@ if ($Mode -eq 'Upgrade') {
         [pscustomobject]@{ requirementId='settings-migration'; status=$(if($settingsPassed){'passed'}else{'failed'}); details='Requires a successful byte-for-byte settings preservation assertion.' },
         [pscustomobject]@{ requirementId='no-duplicates'; status=$(if($duplicatesPassed){'passed'}else{'failed'}); details='Requires one uninstall record and no duplicate autostart entry.' }
     )
-    $notes = @('Real upgrade mode is restricted to an explicitly designated disposable environment.')
+    $notes = @('This evidence is a direct NSIS installer overlay compatibility test. It is not application updater end-to-end evidence.')
     if ($invocationError) { $notes += "Invocation error: $invocationError" }
-    Save-EnvironmentResult 'upgrade' $(if($upgradePassed -and $settingsPassed -and $duplicatesPassed){'passed'}else{'failed'}) $checks $notes
+    Save-EnvironmentResult 'upgrade' $(if($upgradePassed -and $settingsPassed -and $duplicatesPassed){'passed'}else{'failed'}) $checks $notes -EvidenceType 'direct_installer_overlay' -SourceReportStatus $(if($upgradeResult){[string]$upgradeResult.status}else{'missing'})
     exit $(if($upgradePassed -and $settingsPassed -and $duplicatesPassed){0}else{2})
+}
+
+if ($Mode -eq 'ApplicationUpdater') {
+    $environmentId = 'application-updater'
+    if ([string]::IsNullOrWhiteSpace($PreviousInstallerPath) -or [string]::IsNullOrWhiteSpace($InstallerPath)) {
+        $checks = @([pscustomobject]@{
+            requirementId='application-updater-e2e'; status='blocked'
+            details='Both version A and version B installer artifacts are required. Version B is reference-only and will not be started by QA.'
+        })
+        Save-EnvironmentResult $environmentId 'blocked' $checks @('No installer was run.') -EvidenceType 'application_updater_e2e' -SourceReportStatus 'not_executed'
+        exit 0
+    }
+    $applicationUpdaterOutput = [System.IO.Path]::Combine($output, $environmentId, 'raw')
+    $applicationUpdaterParameters = @{
+        PreviousInstallerPath=$PreviousInstallerPath
+        InstallerPath=$InstallerPath
+        PreviousUpdaterManifestPath=$PreviousUpdaterManifestPath
+        UpdaterManifestPath=$UpdaterManifestPath
+        UpdaterPublicKeyPath=$UpdaterPublicKeyPath
+        ExpectedVersion=$ExpectedVersion
+        OutputDirectory=$applicationUpdaterOutput
+        TimeoutSeconds=600
+        UninstallAfterUpdate=$UninstallAfterUpdate
+    }
+    if ($WhatIfPreference) {
+        & "$PSScriptRoot\application-updater-smoke-test.ps1" @applicationUpdaterParameters -WhatIf
+        exit $LASTEXITCODE
+    }
+    $resultPath = [System.IO.Path]::Combine($applicationUpdaterOutput, 'application-updater-result.json')
+    $relativeRawReport = [System.IO.Path]::Combine('raw', 'application-updater-result.json')
+    if (-not $PSCmdlet.ShouldProcess('Explicit disposable Windows QA environment', 'Install version A only and monitor a user-triggered in-app update to version B')) {
+        $declinedResult = [ordered]@{
+            schemaVersion=1; evidenceType='application_updater_e2e'; phase='confirmation-declined'; status='not_executed'; whatIf=$false
+            startedAtUtc=[DateTime]::UtcNow.ToString('o'); finishedAtUtc=[DateTime]::UtcNow.ToString('o')
+            currentInstallerExecutionAllowed=$false; endpointCandidateBinding=$false
+            uiPendingTargetObserved=$false; uiConfirmedTargetObserved=$false; uiPendingClearedAfterConfirmation=$false
+            installerExecutions=@(); checks=@(); failure=$null
+        }
+        Write-PublicBetaAtomicJson -InputObject $declinedResult -LiteralPath $resultPath -Depth 12
+        $declinedHash = (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash
+        $declinedChecks = @([pscustomobject]@{ requirementId='application-updater-e2e'; status='not_executed'; details='Operator declined the real application updater run.' })
+        Save-EnvironmentResult $environmentId 'not_executed' $declinedChecks @('Operator declined confirmation; no installer was run.') `
+            -EvidenceType 'application_updater_e2e' -SourceReportStatus 'not_executed' -SourceReportFile $relativeRawReport -SourceReportSha256 $declinedHash
+        exit 0
+    }
+    $exitCode = 1
+    $invocationError = $null
+    try {
+        & "$PSScriptRoot\application-updater-smoke-test.ps1" @applicationUpdaterParameters -Confirm:$false
+        $exitCode = $LASTEXITCODE
+    } catch {
+        $invocationError = $_.Exception.Message
+    }
+    $rawReadError = $null
+    $applicationUpdaterResult = $null
+    if ([System.IO.File]::Exists($resultPath)) {
+        try { $applicationUpdaterResult = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+        catch { $rawReadError = ConvertTo-PublicBetaSafeFailureMessage -Message $_.Exception.Message -RepositoryRoot $repo }
+    }
+    $rawReportHash = if ([System.IO.File]::Exists($resultPath)) { (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash } else { $null }
+    $sourceStatus = if ($applicationUpdaterResult) { [string](Get-ObjectPropertyValue $applicationUpdaterResult 'status') } else { 'missing' }
+    $sourceEvidenceType = if ($applicationUpdaterResult) { [string](Get-ObjectPropertyValue $applicationUpdaterResult 'evidenceType') } else { $null }
+    $rawRoles = if ($applicationUpdaterResult) { @((Get-ObjectPropertyValue $applicationUpdaterResult 'cryptographicallyVerifiedArtifactRoles') | ForEach-Object { [string]$_ } | Sort-Object -Unique) } else { @() }
+    $rawExecutions = if ($applicationUpdaterResult) { @((Get-ObjectPropertyValue $applicationUpdaterResult 'installerExecutions')) } else { @() }
+    $rawApplicationEvidence = $applicationUpdaterResult -and
+        (Test-DeskPetSchemaVersionOne -InputObject $applicationUpdaterResult) -and
+        [string](Get-ObjectPropertyValue $applicationUpdaterResult 'phase') -eq 'completed' -and
+        (Get-ObjectPropertyValue $applicationUpdaterResult 'whatIf') -is [bool] -and -not [bool](Get-ObjectPropertyValue $applicationUpdaterResult 'whatIf') -and
+        [string](Get-ObjectPropertyValue $applicationUpdaterResult 'finalProbeStatus') -eq 'passed' -and
+        $null -eq (Get-ObjectPropertyValue $applicationUpdaterResult 'failure') -and
+        (Get-ObjectPropertyValue $applicationUpdaterResult 'endpointCandidateBinding') -is [bool] -and [bool](Get-ObjectPropertyValue $applicationUpdaterResult 'endpointCandidateBinding') -and
+        (Get-ObjectPropertyValue $applicationUpdaterResult 'uiPendingTargetObserved') -is [bool] -and [bool](Get-ObjectPropertyValue $applicationUpdaterResult 'uiPendingTargetObserved') -and
+        (Get-ObjectPropertyValue $applicationUpdaterResult 'uiConfirmedTargetObserved') -is [bool] -and [bool](Get-ObjectPropertyValue $applicationUpdaterResult 'uiConfirmedTargetObserved') -and
+        (Get-ObjectPropertyValue $applicationUpdaterResult 'uiPendingClearedAfterConfirmation') -is [bool] -and [bool](Get-ObjectPropertyValue $applicationUpdaterResult 'uiPendingClearedAfterConfirmation') -and
+        (Get-ObjectPropertyValue $applicationUpdaterResult 'uiOrderedTransitionObserved') -is [bool] -and [bool](Get-ObjectPropertyValue $applicationUpdaterResult 'uiOrderedTransitionObserved') -and
+        $rawExecutions.Count -eq 1 -and [string](Get-ObjectPropertyValue $rawExecutions[0] 'role') -eq 'version_a' -and
+        $rawRoles.Count -eq 2 -and $rawRoles -contains 'version_a' -and $rawRoles -contains 'version_b'
+    $applicationUpdaterPassed = $applicationUpdaterResult -and $sourceEvidenceType -eq 'application_updater_e2e' -and $sourceStatus -eq 'passed' -and $rawApplicationEvidence -and $exitCode -eq 0 -and -not $invocationError
+    $settingsPassed = $applicationUpdaterPassed -and @($applicationUpdaterResult.checks | Where-Object { $_.name -eq 'Settings preserved' -and $_.passed }).Count -eq 1
+    $characterPassed = $applicationUpdaterPassed -and @($applicationUpdaterResult.checks | Where-Object { $_.name -eq 'Character selection preserved' -and $_.passed }).Count -eq 1
+    $duplicatesPassed = $applicationUpdaterPassed -and @($applicationUpdaterResult.checks | Where-Object { $_.name -in @('Single uninstall record','No duplicate autostart') -and $_.passed }).Count -eq 2
+    $checks = @(
+        [pscustomobject]@{ requirementId='application-updater-e2e'; status=$(if($applicationUpdaterPassed){'passed'}else{'failed'}); details="evidenceType=$sourceEvidenceType; sourceStatus=$sourceStatus; exitCode=$exitCode; reportPresent=$([bool]$applicationUpdaterResult)" },
+        [pscustomobject]@{ requirementId='settings-migration'; status=$(if($settingsPassed -and $characterPassed){'passed'}else{'failed'}); details='Stable settings fields and character selection must both survive the in-app update.' },
+        [pscustomobject]@{ requirementId='no-duplicates'; status=$(if($duplicatesPassed){'passed'}else{'failed'}); details='Requires one uninstall record and no duplicate autostart entry after the in-app update.' }
+    )
+    $environmentStatus = if ($applicationUpdaterPassed -and $settingsPassed -and $characterPassed -and $duplicatesPassed) { 'passed' } else { 'failed' }
+    $notes = @('The QA script starts only version A. Version B must be discovered, downloaded, and installed by the application updater UI.')
+    if ($invocationError) {
+        $safeInvocationError = ConvertTo-PublicBetaSafeFailureMessage -Message $invocationError -RepositoryRoot $repo
+        $notes += "Invocation error: $safeInvocationError"
+    }
+    if ($rawReadError) { $notes += "Raw report parse error: $rawReadError" }
+    Save-EnvironmentResult $environmentId $environmentStatus $checks $notes -EvidenceType 'application_updater_e2e' -SourceReportStatus $sourceStatus `
+        -SourceReportFile $relativeRawReport -SourceReportSha256 $rawReportHash
+    exit $(if($environmentStatus -eq 'passed'){0}else{2})
 }
 
 if ($Mode -eq 'Performance') {

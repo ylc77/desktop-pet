@@ -1,59 +1,85 @@
-# Updater 托管要求
+# Updater 托管：GitHub Releases 与待确认的元数据方案
 
-当前尚未选择正式更新托管服务，Production endpoint 未配置。普通构建保持 `NOT_CONFIGURED`，不会使用 `example.invalid`、HTTP 或开发者本地地址冒充生产更新源。
-
-`config/updater.example.json` 只说明需要的 `beta`、`windows-x86_64`、HTTPS endpoint 和公钥字段，不是 Production 配置，也不能原样发布。
-
-## 待选择的方案
-
-项目所有者需要在以下方案中选择一个：
-
-1. GitHub Releases 与静态 `latest.json`
-2. 自有 HTTPS 域名
-3. Cloudflare R2、Amazon S3 或同类静态对象存储
-4. 暂时只保留本地集成，不配置公网 endpoint
-
-当前仓库没有 Git remote。本任务不创建仓库、remote、Release，也不上传安装包。
-
-## 必须满足的托管契约
-
-- 全部 Production URL 使用 HTTPS，证书链有效。
-- Production 工具拒绝 localhost、IP literal、`.local` 及 IANA 示例/测试域名；本地集成测试不得把这些地址烘焙进发布构建。
-- `latest.json` 使用 UTF-8 无 BOM，返回有效 JSON 和正确 Content-Type。
-- 平台键为 `windows-x86_64`，渠道为 `beta`。
-- 下载 URL 指向不可变的版本化安装包，不能指向 `七酱桌宠.exe` 可变别名。
-- 同目录保留安装包、对应 `.sig`、`latest.json`、`SHA256SUMS.txt`、release manifest 和发布说明。
-- `latest.json.signature` 等于 `.sig` 文件的实际文本内容。
-- 更新版本必须是有效 SemVer，且严格高于已安装版本；安装包文件名必须包含精确版本，不发布降级元数据。
-- `platforms.<target>.url` 的末段必须与实际版本化安装包文件名完全一致，配对签名文件必须命名为 `<安装包>.sig`；不得通过重定向把元数据绑定到可变别名。
-- `platforms.<target>.size` 必须是最终安装包的实际字节数，并在上传前后复核。
-- 不把密码、令牌、私钥路径、用户名、绝对本机路径或带敏感 query 的 URL 写入静态文件。
-
-建议目录：
+项目所有者已经确认使用公开仓库 `ylc77/desktop-pet` 的 GitHub Releases 托管版本化 Windows 二进制。GitHub Pages 仅是当前建议的 `beta` 元数据托管方案，尚未得到所有者明确确认、启用或实现；建议地址为：
 
 ```text
-release/updater/
-  0.2.1-beta.1/
-    七酱桌宠_0.2.1-beta.1_x64-setup.exe
-    七酱桌宠_0.2.1-beta.1_x64-setup.exe.sig
-    latest.json
-    SHA256SUMS.txt
-    release-manifest.json
-    RELEASE_NOTES.md
+https://ylc77.github.io/desktop-pet/updater/beta/latest.json
 ```
 
-上面的版本号只是目录格式示例，不代表该版本已构建或发布。
+托管草案位于 `config/updater.github-releases.json`，当前明确为 `enabled: false`，并且 `metadata.ownerConfirmed: false`。它不包含私钥、公钥正文、密码或访问凭据；GitHub Pages 和 Release 尚未创建或修改，因此上面的 URL 只是建议值，不能当作已确认或可用的 Production endpoint。
 
-## 发布顺序
+## 为什么分开托管
 
-1. 在本地提供仓库外公钥，对最终安装包和 `.sig` 做真实密码学验签，并验证哈希、manifest 与 `latest.json` 的版本、URL 文件名和实际 size。
-2. 先上传版本化安装包与 `.sig`，保持它们不可公开发现或不更新索引。
-3. 从独立环境下载并核对长度、SHA-256 与签名。
-4. 最后原子替换或上传 `latest.json`，让客户端发现更新。
-5. 清理 CDN 缓存时只针对元数据；版本化二进制应使用不可变缓存策略。
+GitHub prerelease 不应使用 `/releases/latest`：该路由的语义不保证选中目标 beta prerelease。把 `latest.json` 作为同名滚动 Release asset 反复替换也有非原子窗口，客户端可能在资产更新期间读到旧元数据、404 或缓存副本。
 
-如果安装包或签名上传失败，不发布新 `latest.json`。已发布元数据发生故障时可以让 endpoint 暂时返回上一个有效版本或停止自动发现，但不得把低版本伪装成高版本，也不得关闭签名验证。
+如果所有者后续明确确认 GitHub Pages，建议采用两层模型：
+
+- GitHub Releases 保存不可变的版本化安装包和 `.sig`，tag 固定为 `v<完整 SemVer>`。
+- GitHub Pages 保存版本化元数据快照和稳定 beta 指针；先部署 `updater/beta/<version>/latest.json`，最后才更新 `updater/beta/latest.json`。
+
+示例 `0.2.1-beta.1` 只说明格式，并不表示该版本已经构建或发布：
+
+```text
+Release tag: v0.2.1-beta.1
+Asset: 七酱桌宠_0.2.1-beta.1_x64-setup.exe
+Asset: 七酱桌宠_0.2.1-beta.1_x64-setup.exe.sig
+Download: https://github.com/ylc77/desktop-pet/releases/download/v0.2.1-beta.1/<版本化安装包>
+
+Pages snapshot: /desktop-pet/updater/beta/0.2.1-beta.1/latest.json
+Pages stable:   /desktop-pet/updater/beta/latest.json
+```
+
+不得把公开别名 `七酱桌宠.exe`、滚动同名 Release asset 或 `/releases/latest` 写入 updater 元数据。
+
+## 托管契约
+
+- 仓库必须可匿名访问；发布前用 `gh auth status` 和仓库可见性查询确认操作者身份及 `PUBLIC` 可见性。
+- 全部 URL 使用 HTTPS，不含凭据、query 或 fragment。
+- Release 先建立为 draft prerelease；tag 和安装包文件名都包含完整 SemVer。
+- 安装包、`.sig`、`SHA256SUMS.txt` 和 updater release manifest 使用不可变文件名，不覆盖已存在版本。
+- `latest.json` 使用 UTF-8 无 BOM，平台键固定为 `windows-x86_64`，安装模式保持 `passive`。
+- `latest.json` 中的 URL 文件名、签名正文和 size 必须分别等于实际安装包文件名、`.sig` 正文和最终字节数。
+- 上传后必须从 GitHub 重新下载到新的临时目录，复核 SHA-256 并使用正式公钥做密码学验签。
+- draft 资产验证通过后才能发布 prerelease；公开下载再次验证通过后，才允许部署 GitHub Pages 元数据。
+- 若任一步失败，不更新稳定 `latest.json`，也不删除或改写旧版本伪造成功。
+
+## 本地预检
+
+`plan-github-release.ps1` 默认只返回预览。它读取禁用配置，检查 GitHub CLI 登录、公开 login 的脱敏值、至少 `WRITE` 权限、仓库身份和公开性、本地 `origin`、当前 HEAD 已存在于目标仓库、目标 tag/release/资产名尚未占用、干净工作区、版本、manifest、SHA-256、`.sig`、正式公钥指纹、`latest.json` 绑定关系及真实验签结果：
+
+```powershell
+.\scripts\updater\plan-github-release.ps1 `
+  -Version '<目标版本>' `
+  -CurrentVersion '<基础版本>' `
+  -ArtifactPath '<版本化安装包>' `
+  -SignaturePath '<版本化安装包>.sig' `
+  -PublicKeyPath "$env:USERPROFILE\.tauri\qijiang-desktop-pet.key.pub" `
+  -LatestJsonPath '<版本目录>\latest.json' `
+  -ManifestPath '<版本目录>\updater-release-manifest.json' `
+  -ChecksumPath '<版本目录>\SHA256SUMS.txt' `
+  -WhatIf
+```
+
+配置保持禁用、GitHub Pages 尚未得到明确确认或任意预检项失败时，Gate 为 false，`-ConfirmPlan` 会明确拒绝。任何 GitHub 查询异常都按失败处理。即使全部通过，`-ConfirmPlan` 也只确认本地计划，不创建 Release、不上传资产、不推送分支、不更改 Pages。
+
+## 上传后的回下载验证
+
+远端资产由已授权的独立步骤创建后，可运行只读验证器：
+
+```powershell
+.\scripts\updater\verify-github-release-assets.ps1 `
+  -Version '<目标版本>' `
+  -CurrentVersion '<基础版本>' `
+  -ArtifactPath '<本地版本化安装包>' `
+  -SignaturePath '<本地版本化安装包>.sig' `
+  -PublicKeyPath "$env:USERPROFILE\.tauri\qijiang-desktop-pet.key.pub" `
+  -LatestJsonPath '<版本目录>\latest.json' `
+  -ManifestPath '<版本目录>\updater-release-manifest.json' `
+  -ChecksumPath '<版本目录>\SHA256SUMS.txt'
+```
+
+验证器只执行读取和临时下载，不修改远端资源；它会独立复核下载 manifest 的 schema、版本转换、Git commit、身份、文件名、size、SHA-256、endpoint、公钥指纹、`latest.json`、checksums 和真实签名，并确认 commit/tag/release/资产都属于目标仓库。结束时删除临时副本，清理失败只返回脱敏错误。发布 prerelease 后，还必须在未登录的干净环境验证公开安装包 URL；只有 Pages 方案另行确认并实现后，才验证并启用 Pages URL。
 
 ## 权限与日志
 
-托管访问令牌只存在于发布操作者的安全凭据存储或受控 CI secret 中，不进入仓库和本地 QA 输出。服务端访问日志由所选托管商处理；正式采用服务前应确认保留期、地区、访问控制和隐私说明是否需要更新。
+GitHub 凭据只由 GitHub CLI 的安全凭据机制或受控 CI secret 管理，不写入配置、命令参数、release manifest 或 QA 报告。Production 私钥始终位于仓库外。发布日志只记录仓库名、tag、相对文件名、大小、哈希、公钥指纹和 Gate 结果，不记录私钥路径或本机绝对路径。

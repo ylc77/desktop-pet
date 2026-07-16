@@ -12,7 +12,7 @@
 | updater-foundation | Updater/Process 插件、状态机和用户入口 | passed（需在候选 commit 重跑） | 单元测试、Rust 测试、静态配置检查 |
 | updater-production-config | 生产 updater 公钥和 HTTPS endpoint | blocked | 用户确认、外部私钥验证、公钥指纹、最终配置 |
 | updater-artifacts | 版本化安装包、`.sig`、含实际 size 的 `latest.json` 与 manifest | blocked | 外部生产公钥真实验签及最终产物验证结果 |
-| updater-e2e | 两个真实版本下载、安装、重启和数据保留 | blocked | 隔离环境 A → B 独立结果 |
+| application-updater-e2e | A 的应用内 updater 下载、安装并重启到 B，且数据保留 | blocked | 原始报告 SHA-256 绑定；严格 integer schema；远端 latest 与本地 B/生产公钥绑定；按 A pending→B restart→B confirmed 顺序观察；只执行 A；设置、完整角色包、启动项和开始菜单均保留；直接安装器覆盖结果不能替代 |
 | current-machine-lifecycle | 当前候选的真实安装、启动、退出和卸载 | not_executed | 当前候选独立报告；历史结果不能替代 |
 | clean-windows-11 | 干净 Windows 11 生命周期 | blocked | Sandbox/VM 独立结果 |
 | clean-windows-10 | 干净 Windows 10 生命周期 | blocked | Windows 10 VM 独立结果 |

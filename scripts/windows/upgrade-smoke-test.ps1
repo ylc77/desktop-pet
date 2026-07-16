@@ -65,11 +65,12 @@ $output = $OutputDirectory
 [System.IO.Directory]::CreateDirectory($output) | Out-Null
 $reportPath = [System.IO.Path]::Combine($output, 'upgrade-result.json')
 $settingsPath = Join-Path $env:APPDATA "$script:AppIdentifier\settings.json"
-$state = [ordered]@{ phase='preview'; status='not_executed'; startedAtUtc=[DateTime]::UtcNow.ToString('o'); previousVersion=$previousVersion; currentVersion=$currentVersion; identifier=[string](Get-ObjectPropertyValue $currentUpdaterManifest 'identifier'); publicKeyFingerprint=[string](Get-ObjectPropertyValue $currentUpdaterManifest 'publicKeyFingerprint'); previousInstallerSha256=$previousHash; installerSha256=$currentHash; checks=@(); recoveryCommands=@('.\scripts\windows\uninstall-smoke-test.ps1 -WhatIf') }
+$state = [ordered]@{ schemaVersion=1; evidenceType='direct_installer_overlay'; phase='preview'; status='not_executed'; startedAtUtc=[DateTime]::UtcNow.ToString('o'); previousVersion=$previousVersion; currentVersion=$currentVersion; identifier=[string](Get-ObjectPropertyValue $currentUpdaterManifest 'identifier'); publicKeyFingerprint=[string](Get-ObjectPropertyValue $currentUpdaterManifest 'publicKeyFingerprint'); previousInstallerSha256=$previousHash; installerSha256=$currentHash; checks=@(); recoveryCommands=@('.\scripts\windows\uninstall-smoke-test.ps1 -WhatIf') }
 
 if ($WhatIfPreference) {
     Write-Host "Upgrade preview: previous=$(Split-Path $previous -Leaf); current=$(Split-Path $current -Leaf); output=$output"
-    Write-Host 'Would install the previous version, require non-sensitive settings preparation and normal exit, install the current version without uninstalling first, verify preservation and duplicates, then uninstall.'
+    Write-Host 'Evidence type: direct_installer_overlay (not application_updater_e2e).'
+    Write-Host 'Would install the previous version, require non-sensitive settings preparation and normal exit, directly install the current version without uninstalling first, verify preservation and duplicates, then uninstall.'
     $state | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     exit 0
 }

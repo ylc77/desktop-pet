@@ -251,15 +251,66 @@ function Assert-UpdaterSignatureBinding {
     }
 }
 
+function Test-UpdaterSensitiveMetadataKey {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $normalized = ($Name -replace '[^A-Za-z0-9]', '').ToLowerInvariant()
+    foreach ($fragment in @('password','passwd','secret','token','credential','authorization','privatekey','apikey')) {
+        if ($normalized.Contains($fragment)) { return $true }
+    }
+    return $normalized -eq 'pat' -or $normalized -match '^(?:github|personalaccess)pat$'
+}
+
+function Assert-NoUpdaterSensitiveJsonKeys {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value -or $Value -is [string] -or $Value -is [System.ValueType]) { return }
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in $Value.Keys) {
+            if (Test-UpdaterSensitiveMetadataKey -Name ([string]$key)) {
+                throw 'Updater metadata contains a sensitive field name.'
+            }
+            Assert-NoUpdaterSensitiveJsonKeys -Value $Value[$key]
+        }
+        return
+    }
+    if ($Value -is [System.Collections.IEnumerable]) {
+        foreach ($item in $Value) { Assert-NoUpdaterSensitiveJsonKeys -Value $item }
+        return
+    }
+    foreach ($property in @($Value.PSObject.Properties | Where-Object {
+        $_.MemberType -in @('NoteProperty','Property','AliasProperty','ScriptProperty','CodeProperty')
+    })) {
+        if (Test-UpdaterSensitiveMetadataKey -Name ([string]$property.Name)) {
+            throw 'Updater metadata contains a sensitive field name.'
+        }
+        Assert-NoUpdaterSensitiveJsonKeys -Value $property.Value
+    }
+}
+
 function Assert-NoUpdaterSensitiveMetadata {
     param([Parameter(Mandatory)][string]$Text)
+
+    $parsedJson = $null
+    $jsonParsed = $false
+    try {
+        $parsedJson = $Text | ConvertFrom-Json -ErrorAction Stop
+        $jsonParsed = $true
+    } catch {
+        $jsonParsed = $false
+    }
+    if ($jsonParsed) { Assert-NoUpdaterSensitiveJsonKeys -Value $parsedJson }
+
     $patterns = @(
         '(?i)(?<![A-Za-z])[A-Z]:[\\/]',
         '(?i)\\\\[^\\]+\\',
         '(?i)/(?:Users|home)/[^/]+/',
         '(?i)TAURI_SIGNING_PRIVATE_KEY',
         '(?i)BEGIN [A-Z ]*PRIVATE KEY',
-        '(?i)(?:password|passwd|secret|access[_-]?token|api[_-]?key)\s*[:=]'
+        '(?i)\bgh[pousr]_[A-Za-z0-9]{20,}\b',
+        '(?i)\bgithub_pat_[A-Za-z0-9_]{20,}\b',
+        '(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{20,}',
+        '(?i)(?<![A-Za-z0-9])(?:["'']\s*)?(?:[A-Za-z0-9_-]*(?:password|passwd|secret|token|credential|authorization|private[_-]*key|api[_-]*key)[A-Za-z0-9_-]*|(?:github|personal[_-]*access)?[_-]*pat)(?:\s*["''])?\s*[:=]'
     )
     foreach ($pattern in $patterns) {
         if ($Text -match $pattern) { throw 'Updater metadata contains a local path or secret-like value.' }
@@ -543,6 +594,10 @@ function Find-UpdaterSecretIndicators {
             $category = 'private-key-material'
         } elseif ($line -match '(?i)^\s*TAURI_SIGNING_PRIVATE_KEY(?:_PASSWORD)?\s*[:=]\s*[^\s$%<{][^\s]*') {
             $category = 'signing-environment-value'
+        } elseif ($line -match '(?i)\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b') {
+            $category = 'github-token-value'
+        } elseif ($line -match '(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{20,}') {
+            $category = 'bearer-token-value'
         } elseif (
             $line -match '(?i)["''](?:updater[_-]?)?(?:password|secret|access[_-]?token|api[_-]?key)["'']?\s*[:=]\s*["''][^"''$%<{][^"'']{7,}["'']' -or
             $line -match '(?i)^\s*(?:updater[_-]?)?(?:password|secret|access[_-]?token|api[_-]?key)\s*[:=]\s*[^\s$%<{][^\s]{7,}\s*$'
@@ -582,5 +637,578 @@ function Test-UpdaterKeyFiles {
         PublicKeyPath = ConvertTo-UpdaterRedactedPath $PublicKeyPath
         PublicKeySha256 = Get-UpdaterPublicKeyFingerprint -LiteralPath $PublicKeyPath
         PrivateKeyContainerEncrypted = $true
+    }
+}
+
+function Get-UpdaterObjectPropertyValue {
+    param(
+        [Parameter(Mandatory)][object]$InputObject,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Normalize-UpdaterDirectoryPath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try {
+        $absolutePath = [System.IO.Path]::GetFullPath($Path)
+        $root = [System.IO.Path]::GetPathRoot($absolutePath)
+    } catch {
+        throw 'Updater key backup directory path is invalid.'
+    }
+    if ([string]::IsNullOrWhiteSpace($root)) { throw 'Updater key backup directory path has no filesystem root.' }
+    $trimmedPath = $absolutePath.TrimEnd('\', '/')
+    $trimmedRoot = $root.TrimEnd('\', '/')
+    if ([string]::Equals($trimmedPath, $trimmedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        return $root
+    }
+    return $trimmedPath
+}
+
+function Normalize-UpdaterFilePath {
+    param([Parameter(Mandatory)][string]$Path)
+
+    try { return [System.IO.Path]::GetFullPath($Path) } catch { throw 'Updater key file path is invalid.' }
+}
+
+function Test-UpdaterPhysicalBusType {
+    param([AllowNull()][string]$BusType)
+
+    if ([string]::IsNullOrWhiteSpace($BusType)) { return $false }
+    return $BusType.Trim() -in @(
+        'ATA', 'SAS', 'SATA', 'SD', 'MMC', 'USB', 'NVMe', 'SCM', 'UFS'
+    )
+}
+
+function Get-UpdaterStableDiskIdentity {
+    param([Parameter(Mandatory)][object]$Disk)
+
+    $uniqueId = [string](Get-UpdaterObjectPropertyValue -InputObject $Disk -Name 'UniqueId')
+    if (-not [string]::IsNullOrWhiteSpace($uniqueId)) {
+        return 'unique:' + $uniqueId.Trim()
+    }
+    $serialNumber = [string](Get-UpdaterObjectPropertyValue -InputObject $Disk -Name 'SerialNumber')
+    if (-not [string]::IsNullOrWhiteSpace($serialNumber)) {
+        return 'serial:' + $serialNumber.Trim()
+    }
+    return $null
+}
+
+function Get-UpdaterBackupVolumeIdentity {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [scriptblock]$VolumeResolver
+    )
+
+    $absolutePath = [System.IO.Path]::GetFullPath($Path)
+    if ($null -ne $VolumeResolver) {
+        if ($env:DESK_PET_UPDATER_TEST_MODE -ne '1') {
+            throw 'The custom backup volume resolver is available only to the isolated updater regression test.'
+        }
+        $resolved = & $VolumeResolver $absolutePath
+        if ($null -eq $resolved) { throw 'The injected backup volume resolver returned no result.' }
+        $identity = [string](Get-UpdaterObjectPropertyValue -InputObject $resolved -Name 'Identity')
+        $verifiedValue = Get-UpdaterObjectPropertyValue -InputObject $resolved -Name 'Verified'
+        $removableValue = Get-UpdaterObjectPropertyValue -InputObject $resolved -Name 'Removable'
+        if ([string]::IsNullOrWhiteSpace($identity) -or
+            $verifiedValue -isnot [System.Boolean] -or
+            $removableValue -isnot [System.Boolean]) {
+            throw 'The injected backup volume resolver must return Identity plus strict Boolean Verified and Removable values.'
+        }
+        $description = [string](Get-UpdaterObjectPropertyValue -InputObject $resolved -Name 'Description')
+        return [pscustomobject]@{
+            Identity = $identity
+            Verified = $verifiedValue
+            Description = $(if ([string]::IsNullOrWhiteSpace($description)) { 'injected test volume' } else { $description })
+            Removable = $removableValue
+        }
+    }
+
+    $root = [System.IO.Path]::GetPathRoot($absolutePath)
+    if ([string]::IsNullOrWhiteSpace($root)) { throw 'Backup path has no filesystem root.' }
+    if ($root.StartsWith('\\')) {
+        return [pscustomobject]@{
+            Identity = 'network:' + $root.TrimEnd('\').ToLowerInvariant()
+            Verified = $false
+            Description = 'network share (physical disk cannot be verified)'
+            Removable = $false
+        }
+    }
+    if (-not [System.IO.Directory]::Exists($root)) {
+        throw 'Backup path is on an unavailable drive.'
+    }
+
+    $driveLetter = $root.Substring(0, 1)
+    try {
+        $partitionCommand = Get-Command Get-Partition -ErrorAction Stop
+        $diskCommand = Get-Command Get-Disk -ErrorAction Stop
+        if ($null -eq $partitionCommand -or $null -eq $diskCommand) { throw 'Storage cmdlets are unavailable.' }
+        $partitions = @(Get-Partition -DriveLetter $driveLetter -ErrorAction Stop)
+        if ($partitions.Count -ne 1) { throw 'The drive did not map to exactly one partition.' }
+        $diskNumberValue = Get-UpdaterObjectPropertyValue -InputObject $partitions[0] -Name 'DiskNumber'
+        if ($null -eq $diskNumberValue) { throw 'The partition has no disk number.' }
+        $disks = @(Get-Disk -Number ([uint32]$diskNumberValue) -ErrorAction Stop)
+        if ($disks.Count -ne 1) { throw 'The partition did not map to exactly one physical disk.' }
+        $disk = $disks[0]
+        $identityValue = Get-UpdaterStableDiskIdentity -Disk $disk
+        if ([string]::IsNullOrWhiteSpace($identityValue)) {
+            throw 'The physical disk has no usable identity.'
+        }
+        $busType = [string](Get-UpdaterObjectPropertyValue -InputObject $disk -Name 'BusType')
+        if (-not (Test-UpdaterPhysicalBusType -BusType $busType)) {
+            return [pscustomobject]@{
+                Identity = 'unverified-bus:' + $(if ([string]::IsNullOrWhiteSpace($busType)) { 'unknown' } else { $busType.ToLowerInvariant() })
+                Verified = $false
+                Description = 'virtual, pooled, remote, or unknown storage bus'
+                Removable = $false
+            }
+        }
+        $driveInfo = New-Object System.IO.DriveInfo($driveLetter)
+        $isRemovable = $driveInfo.DriveType -eq [System.IO.DriveType]::Removable -or $busType -in @('USB', 'SD', 'MMC')
+        $description = if ($isRemovable) {
+            $(if ([string]::IsNullOrWhiteSpace($busType)) { 'removable physical disk' } else { "$busType removable physical disk" })
+        } else {
+            $(if ([string]::IsNullOrWhiteSpace($busType)) { 'physical disk' } else { "$busType physical disk" })
+        }
+        return [pscustomobject]@{
+            Identity = 'disk:' + $identityValue.ToLowerInvariant()
+            Verified = $true
+            Description = $description
+            Removable = $isRemovable
+        }
+    } catch {
+        return [pscustomobject]@{
+            Identity = 'unverified-volume:' + $root.ToLowerInvariant()
+            Verified = $false
+            Description = 'filesystem volume (physical disk could not be verified; an elevated PowerShell session may be required)'
+            Removable = $false
+        }
+    }
+}
+
+function Assert-NoUpdaterBackupReparsePoint {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [scriptblock]$AttributeResolver
+    )
+
+    try { $absolutePath = [System.IO.Path]::GetFullPath($Path) } catch { throw 'Updater key backup path is invalid.' }
+    $current = $absolutePath
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        $fileExists = [System.IO.File]::Exists($current)
+        $attributesAvailable = $false
+        try {
+            $attributes = if ($null -eq $AttributeResolver) {
+                [System.IO.File]::GetAttributes($current)
+            } else {
+                & $AttributeResolver $current
+            }
+            $attributesAvailable = $true
+        } catch [System.IO.FileNotFoundException] {
+            $attributesAvailable = $false
+        } catch [System.IO.DirectoryNotFoundException] {
+            $attributesAvailable = $false
+        } catch {
+            throw 'Unable to inspect updater key backup path for reparse points.'
+        }
+        if ($attributesAvailable) {
+            if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Updater key backup paths must not traverse symbolic links, junctions, or mounted-folder reparse points.'
+            }
+        }
+        $parent = if ($fileExists) {
+            [System.IO.Path]::GetDirectoryName($current)
+        } else {
+            [System.IO.Path]::GetDirectoryName($current.TrimEnd('\', '/'))
+        }
+        if ([string]::IsNullOrWhiteSpace($parent) -or [string]::Equals($parent, $current, [StringComparison]::OrdinalIgnoreCase)) { break }
+        $current = $parent
+    }
+}
+
+function Assert-UpdaterBackupStorageSafety {
+    param(
+        [Parameter(Mandatory)][string]$PrivateKeyPath,
+        [Parameter(Mandatory)][string]$PublicKeyPath,
+        [Parameter(Mandatory)][string]$BackupDirectoryOne,
+        [Parameter(Mandatory)][string]$BackupDirectoryTwo,
+        [AllowNull()][string]$PendingDestinationPath,
+        [scriptblock]$VolumeResolver,
+        [AllowNull()][object]$Baseline
+    )
+
+    foreach ($path in @($PrivateKeyPath, $PublicKeyPath, $BackupDirectoryOne, $BackupDirectoryTwo)) {
+        Assert-NoUpdaterBackupReparsePoint -Path $path
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PendingDestinationPath)) {
+        Assert-NoUpdaterBackupReparsePoint -Path $PendingDestinationPath
+    }
+
+    $privatePath = [System.IO.Path]::GetFullPath($PrivateKeyPath)
+    $publicPath = [System.IO.Path]::GetFullPath($PublicKeyPath)
+    $directoryOne = Normalize-UpdaterDirectoryPath -Path $BackupDirectoryOne
+    $directoryTwo = Normalize-UpdaterDirectoryPath -Path $BackupDirectoryTwo
+    $sourceVolume = Get-UpdaterBackupVolumeIdentity -Path $privatePath -VolumeResolver $VolumeResolver
+    $publicSourceVolume = Get-UpdaterBackupVolumeIdentity -Path $publicPath -VolumeResolver $VolumeResolver
+    $volumeOne = Get-UpdaterBackupVolumeIdentity -Path $BackupDirectoryOne -VolumeResolver $VolumeResolver
+    $volumeTwo = Get-UpdaterBackupVolumeIdentity -Path $BackupDirectoryTwo -VolumeResolver $VolumeResolver
+    if (-not $sourceVolume.Verified -or -not $publicSourceVolume.Verified -or
+        -not $volumeOne.Verified -or -not $volumeTwo.Verified) {
+        throw 'Unable to prove that the source and both backup locations are on separate physical disks. Re-run from an elevated PowerShell session after connecting both backup media.'
+    }
+    if (-not [string]::Equals([string]$sourceVolume.Identity, [string]$publicSourceVolume.Identity, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The updater private and public key sources must remain on the same verified physical disk.'
+    }
+    if (-not $volumeOne.Removable -or -not $volumeTwo.Removable) {
+        throw 'Both updater key backup targets must be USB, SD, MMC, or Windows removable-drive media.'
+    }
+    $identities = @([string]$sourceVolume.Identity, [string]$volumeOne.Identity, [string]$volumeTwo.Identity)
+    if (@($identities | Sort-Object -Unique).Count -ne 3) {
+        throw 'The source and both updater key backups must be on three separate physical disks.'
+    }
+
+    $snapshot = [pscustomobject]@{
+        Source = $sourceVolume
+        PublicSource = $publicSourceVolume
+        BackupOne = $volumeOne
+        BackupTwo = $volumeTwo
+        PrivateKeyPath = $privatePath
+        PublicKeyPath = $publicPath
+        BackupDirectoryOne = $directoryOne
+        BackupDirectoryTwo = $directoryTwo
+        PrivateKeyRoot = [System.IO.Path]::GetPathRoot($privatePath)
+        PublicKeyRoot = [System.IO.Path]::GetPathRoot($publicPath)
+        BackupOneRoot = [System.IO.Path]::GetPathRoot($directoryOne)
+        BackupTwoRoot = [System.IO.Path]::GetPathRoot($directoryTwo)
+    }
+
+    if ($null -ne $Baseline) {
+        $comparisons = @(
+            [pscustomobject]@{ Name='PrivateKeyPath'; Actual=[string]$snapshot.PrivateKeyPath },
+            [pscustomobject]@{ Name='PublicKeyPath'; Actual=[string]$snapshot.PublicKeyPath },
+            [pscustomobject]@{ Name='BackupDirectoryOne'; Actual=[string]$snapshot.BackupDirectoryOne },
+            [pscustomobject]@{ Name='BackupDirectoryTwo'; Actual=[string]$snapshot.BackupDirectoryTwo },
+            [pscustomobject]@{ Name='PrivateKeyRoot'; Actual=[string]$snapshot.PrivateKeyRoot },
+            [pscustomobject]@{ Name='PublicKeyRoot'; Actual=[string]$snapshot.PublicKeyRoot },
+            [pscustomobject]@{ Name='BackupOneRoot'; Actual=[string]$snapshot.BackupOneRoot },
+            [pscustomobject]@{ Name='BackupTwoRoot'; Actual=[string]$snapshot.BackupTwoRoot },
+            [pscustomobject]@{ Name='SourceIdentity'; Actual=[string]$snapshot.Source.Identity },
+            [pscustomobject]@{ Name='PublicSourceIdentity'; Actual=[string]$snapshot.PublicSource.Identity },
+            [pscustomobject]@{ Name='BackupOneIdentity'; Actual=[string]$snapshot.BackupOne.Identity },
+            [pscustomobject]@{ Name='BackupTwoIdentity'; Actual=[string]$snapshot.BackupTwo.Identity }
+        )
+        foreach ($comparison in $comparisons) {
+            $name = [string]$comparison.Name
+            $actual = [string]$comparison.Actual
+            $expected = if ($name -eq 'SourceIdentity') {
+                [string]$Baseline.Source.Identity
+            } elseif ($name -eq 'PublicSourceIdentity') {
+                [string]$Baseline.PublicSource.Identity
+            } elseif ($name -eq 'BackupOneIdentity') {
+                [string]$Baseline.BackupOne.Identity
+            } elseif ($name -eq 'BackupTwoIdentity') {
+                [string]$Baseline.BackupTwo.Identity
+            } else {
+                [string](Get-UpdaterObjectPropertyValue -InputObject $Baseline -Name $name)
+            }
+            if ([string]::IsNullOrWhiteSpace($expected) -or
+                -not [string]::Equals($expected, $actual, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Updater key backup storage identity or path role changed after confirmation.'
+            }
+        }
+    }
+
+    return $snapshot
+}
+
+function Get-UpdaterBackupFileHash {
+    param([Parameter(Mandatory)][string]$LiteralPath)
+
+    if (-not [System.IO.File]::Exists($LiteralPath)) { throw 'Backup hash source file does not exist.' }
+    $stream = $null
+    $sha256 = $null
+    try {
+        $stream = [System.IO.File]::OpenRead($LiteralPath)
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToUpperInvariant()
+    } catch {
+        throw 'Unable to read an updater key backup file for SHA-256 verification.'
+    } finally {
+        if ($null -ne $sha256) { $sha256.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
+    }
+}
+
+function Copy-UpdaterBackupFileVerified {
+    param(
+        [Parameter(Mandatory)][string]$SourcePath,
+        [Parameter(Mandatory)][string]$DestinationPath,
+        [scriptblock]$CopyAction,
+        [scriptblock]$AuthorizedCleanupAction
+    )
+
+    if ($null -ne $CopyAction -and $env:DESK_PET_UPDATER_TEST_MODE -ne '1') {
+        throw 'The custom updater backup copy action is available only to the isolated updater regression test.'
+    }
+    if (-not [System.IO.File]::Exists($SourcePath)) { throw 'Updater backup source file does not exist.' }
+    if ([System.IO.File]::Exists($DestinationPath)) { throw 'Refusing to overwrite an existing updater key backup.' }
+    $sourceHash = Get-UpdaterBackupFileHash -LiteralPath $SourcePath
+    $safeFailure = $null
+    try {
+        if ($null -eq $CopyAction) {
+            [System.IO.File]::Copy($SourcePath, $DestinationPath, $false)
+        } else {
+            & $CopyAction $SourcePath $DestinationPath
+        }
+        if (-not [System.IO.File]::Exists($DestinationPath)) { throw 'Updater backup copy did not create the expected file.' }
+        $destinationHash = Get-UpdaterBackupFileHash -LiteralPath $DestinationPath
+        if (-not [string]::Equals($sourceHash, $destinationHash, [StringComparison]::Ordinal)) {
+            throw 'Updater key backup SHA-256 verification failed.'
+        }
+        return $destinationHash
+    } catch {
+        $message = [string]$_.Exception.Message
+        $safeFailure = if ($message -in @(
+            'Updater backup copy did not create the expected file.',
+            'Updater key backup SHA-256 verification failed.',
+            'Unable to read an updater key backup file for SHA-256 verification.'
+        )) { $message } else { 'Updater key backup copy or verification failed.' }
+        if ([System.IO.File]::Exists($DestinationPath)) {
+            if ($null -eq $AuthorizedCleanupAction) {
+                throw 'Updater key backup verification failed and the unverified destination was left for manual inspection.'
+            }
+            try {
+                & $AuthorizedCleanupAction $DestinationPath
+            } catch {
+                throw 'Updater key backup verification failed and automatic cleanup was stopped because storage identity or path safety could not be revalidated. Stop and inspect the destination media manually.'
+            }
+            if ([System.IO.File]::Exists($DestinationPath)) {
+                throw 'Updater key backup verification failed and the unverified destination could not be removed. Stop and inspect the destination media manually.'
+            }
+        }
+        throw $safeFailure
+    }
+}
+
+function New-UpdaterKeyBackupPlan {
+    param(
+        [Parameter(Mandatory)][string]$PrivateKeyPath,
+        [Parameter(Mandatory)][string]$PublicKeyPath,
+        [Parameter(Mandatory)][string]$BackupDirectoryOne,
+        [Parameter(Mandatory)][string]$BackupDirectoryTwo,
+        [string]$RepositoryRoot = $script:UpdaterRepositoryRoot,
+        [scriptblock]$VolumeResolver
+    )
+
+    $privatePath = Assert-UpdaterPrivateKeyPath -KeyPath (Normalize-UpdaterFilePath -Path $PrivateKeyPath) -RepositoryRoot $RepositoryRoot
+    $publicPath = Normalize-UpdaterFilePath -Path $PublicKeyPath
+    if (Test-PathWithinDirectory -Path $publicPath -Directory $RepositoryRoot) {
+        throw 'The updater public key source used for backup must be outside the repository.'
+    }
+    Assert-NoUpdaterBackupReparsePoint -Path $privatePath
+    Assert-NoUpdaterBackupReparsePoint -Path $publicPath
+    try {
+        $keyValidation = Test-UpdaterKeyFiles -PrivateKeyPath $privatePath -PublicKeyPath $publicPath -RepositoryRoot $RepositoryRoot
+    } catch {
+        $message = [string]$_.Exception.Message
+        $safeValidationPatterns = @(
+            '^Updater private key file does not exist\.$',
+            '^Updater public key file does not exist\.$',
+            '^Updater private key file is empty\.$',
+            '^Updater private key does not use the expected encrypted Tauri key container\.$',
+            '^Updater public key file is empty or malformed\.$',
+            '^The public key file appears to contain private key material\.$',
+            '^UTF-8 BOM is not allowed: [^\\/:]+$'
+        )
+        $isSafeValidationError = @($safeValidationPatterns | Where-Object { $message -match $_ }).Count -gt 0
+        if ($isSafeValidationError) { throw $message }
+        throw 'Unable to validate the updater key pair for backup.'
+    }
+    $directoryOne = Normalize-UpdaterDirectoryPath -Path $BackupDirectoryOne
+    $directoryTwo = Normalize-UpdaterDirectoryPath -Path $BackupDirectoryTwo
+    if ([string]::Equals($directoryOne, $directoryTwo, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The two updater key backup directories must be different.'
+    }
+    foreach ($directory in @($directoryOne, $directoryTwo)) {
+        if (Test-PathWithinDirectory -Path $directory -Directory $RepositoryRoot) {
+            throw 'Updater key backup directories must be outside the repository.'
+        }
+        Assert-NoUpdaterBackupReparsePoint -Path $directory
+    }
+
+    $privateName = [System.IO.Path]::GetFileName($privatePath)
+    $publicName = [System.IO.Path]::GetFileName($publicPath)
+    if ([string]::Equals($privateName, $publicName, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The updater private and public key backup filenames must be different.'
+    }
+    $destinationFiles = @(
+        [System.IO.Path]::Combine($directoryOne, $privateName),
+        [System.IO.Path]::Combine($directoryOne, $publicName),
+        [System.IO.Path]::Combine($directoryTwo, $privateName),
+        [System.IO.Path]::Combine($directoryTwo, $publicName)
+    )
+    foreach ($destinationFile in $destinationFiles) {
+        if ([System.IO.File]::Exists($destinationFile)) {
+            throw 'Refusing to overwrite an existing updater key backup.'
+        }
+    }
+
+    $storageSafety = Assert-UpdaterBackupStorageSafety -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+        -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo -VolumeResolver $VolumeResolver
+    $volumeOne = $storageSafety.BackupOne
+    $volumeTwo = $storageSafety.BackupTwo
+
+    return [pscustomobject]@{
+        Mode = 'ValidatedPlan'
+        Source = ConvertTo-UpdaterRedactedPath $privatePath
+        PublicKeyFingerprint = [string]$keyValidation.PublicKeySha256
+        BackupTargets = @(
+            [pscustomobject]@{ Path=ConvertTo-UpdaterRedactedPath $directoryOne; Media=[string]$volumeOne.Description; Removable=[bool]$volumeOne.Removable },
+            [pscustomobject]@{ Path=ConvertTo-UpdaterRedactedPath $directoryTwo; Media=[string]$volumeTwo.Description; Removable=[bool]$volumeTwo.Removable }
+        )
+        FilesToCopy = 4
+        OfflineAfterCopy = $false
+        RequiredFinalAction = 'Safely eject or physically disconnect both backup media, then store them separately.'
+    }
+}
+
+function Invoke-UpdaterKeyBackup {
+    [CmdletBinding(SupportsShouldProcess=$true, ConfirmImpact='High')]
+    param(
+        [Parameter(Mandatory)][string]$PrivateKeyPath,
+        [Parameter(Mandatory)][string]$PublicKeyPath,
+        [Parameter(Mandatory)][string]$BackupDirectoryOne,
+        [Parameter(Mandatory)][string]$BackupDirectoryTwo,
+        [string]$RepositoryRoot = $script:UpdaterRepositoryRoot,
+        [scriptblock]$VolumeResolver,
+        [scriptblock]$CopyAction
+    )
+
+    if ($null -ne $CopyAction -and $env:DESK_PET_UPDATER_TEST_MODE -ne '1') {
+        throw 'The custom updater backup copy action is available only to the isolated updater regression test.'
+    }
+    $privatePath = Normalize-UpdaterFilePath -Path $PrivateKeyPath
+    $publicPath = Normalize-UpdaterFilePath -Path $PublicKeyPath
+    $directoryOne = Normalize-UpdaterDirectoryPath -Path $BackupDirectoryOne
+    $directoryTwo = Normalize-UpdaterDirectoryPath -Path $BackupDirectoryTwo
+    $plan = New-UpdaterKeyBackupPlan -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+        -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo -RepositoryRoot $RepositoryRoot `
+        -VolumeResolver $VolumeResolver
+    if (-not $PSCmdlet.ShouldProcess('two verified external backup media', 'Copy and SHA-256 verify the encrypted updater key pair')) {
+        $plan.Mode = 'PreviewOnly'
+        return $plan
+    }
+
+    # Confirmation can leave an arbitrarily long gap after the first validation.
+    # Rebuild the complete plan before the first mutation so a swapped drive,
+    # newly created file, or newly introduced reparse point fails closed.
+    $plan = New-UpdaterKeyBackupPlan -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+        -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo -RepositoryRoot $RepositoryRoot `
+        -VolumeResolver $VolumeResolver
+    $storageBaseline = Assert-UpdaterBackupStorageSafety -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+        -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo -VolumeResolver $VolumeResolver
+
+    $createdDirectories = New-Object System.Collections.Generic.List[string]
+    $createdFiles = New-Object System.Collections.Generic.List[string]
+    $authorizedDestinationCleanup = {
+        param([string]$DestinationPath)
+        [void](Assert-UpdaterBackupStorageSafety -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+            -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo `
+            -PendingDestinationPath $DestinationPath -VolumeResolver $VolumeResolver -Baseline $storageBaseline)
+        if ([System.IO.File]::Exists($DestinationPath)) {
+            [System.IO.File]::Delete($DestinationPath)
+        }
+    }.GetNewClosure()
+    try {
+        foreach ($directory in @($directoryOne, $directoryTwo)) {
+            [void](Assert-UpdaterBackupStorageSafety -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+                -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo `
+                -VolumeResolver $VolumeResolver -Baseline $storageBaseline)
+            if (-not [System.IO.Directory]::Exists($directory)) {
+                [void][System.IO.Directory]::CreateDirectory($directory)
+                $createdDirectories.Add($directory)
+            }
+            [void](Assert-UpdaterBackupStorageSafety -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+                -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo `
+                -VolumeResolver $VolumeResolver -Baseline $storageBaseline)
+        }
+        foreach ($directory in @($directoryOne, $directoryTwo)) {
+            foreach ($source in @($privatePath, $publicPath)) {
+                $destination = [System.IO.Path]::Combine($directory, [System.IO.Path]::GetFileName($source))
+                [void](Assert-UpdaterBackupStorageSafety -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+                    -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo `
+                    -PendingDestinationPath $destination -VolumeResolver $VolumeResolver -Baseline $storageBaseline)
+                [void](Copy-UpdaterBackupFileVerified -SourcePath $source -DestinationPath $destination `
+                    -CopyAction $CopyAction -AuthorizedCleanupAction $authorizedDestinationCleanup)
+                $createdFiles.Add($destination)
+            }
+        }
+        $plan.Mode = 'Completed'
+        $plan.OfflineAfterCopy = $false
+        return $plan
+    } catch {
+        $message = [string]$_.Exception.Message
+        $safeFailure = if ($message -in @(
+            'Updater backup source file does not exist.',
+            'Refusing to overwrite an existing updater key backup.',
+            'Updater backup copy did not create the expected file.',
+            'Updater key backup SHA-256 verification failed.',
+            'Unable to read an updater key backup file for SHA-256 verification.',
+            'Updater key backup copy or verification failed.',
+            'Updater key backup verification failed and the unverified destination was left for manual inspection.',
+            'Updater key backup verification failed and automatic cleanup was stopped because storage identity or path safety could not be revalidated. Stop and inspect the destination media manually.',
+            'Updater key backup verification failed and the unverified destination could not be removed. Stop and inspect the destination media manually.',
+            'Unable to prove that the source and both backup locations are on separate physical disks. Re-run from an elevated PowerShell session after connecting both backup media.',
+            'Both updater key backup targets must be USB, SD, MMC, or Windows removable-drive media.',
+            'The source and both updater key backups must be on three separate physical disks.',
+            'The updater private and public key sources must remain on the same verified physical disk.',
+            'Updater key backup storage identity or path role changed after confirmation.',
+            'Updater key backup paths must not traverse symbolic links, junctions, or mounted-folder reparse points.',
+            'Unable to inspect updater key backup path for reparse points.',
+            'Backup path is on an unavailable drive.'
+        )) { $message } else { 'Updater key backup failed during directory creation or verified copy.' }
+        $cleanupFailed = $false
+        $cleanupSafetyChanged = $false
+        foreach ($createdFile in $createdFiles) {
+            try {
+                [void](Assert-UpdaterBackupStorageSafety -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+                    -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo `
+                    -PendingDestinationPath $createdFile -VolumeResolver $VolumeResolver -Baseline $storageBaseline)
+            } catch {
+                $cleanupSafetyChanged = $true
+                break
+            }
+            try {
+                if ([System.IO.File]::Exists($createdFile)) { [System.IO.File]::Delete($createdFile) }
+            } catch { $cleanupFailed = $true }
+        }
+        if (-not $cleanupSafetyChanged) {
+            foreach ($createdDirectory in @($createdDirectories | Sort-Object Length -Descending)) {
+                try {
+                    [void](Assert-UpdaterBackupStorageSafety -PrivateKeyPath $privatePath -PublicKeyPath $publicPath `
+                        -BackupDirectoryOne $directoryOne -BackupDirectoryTwo $directoryTwo `
+                        -PendingDestinationPath $createdDirectory -VolumeResolver $VolumeResolver -Baseline $storageBaseline)
+                } catch {
+                    $cleanupSafetyChanged = $true
+                    break
+                }
+                try {
+                    if ([System.IO.Directory]::Exists($createdDirectory) -and [System.IO.Directory]::GetFileSystemEntries($createdDirectory).Count -eq 0) {
+                        [System.IO.Directory]::Delete($createdDirectory, $false)
+                    }
+                } catch { $cleanupFailed = $true }
+            }
+        }
+        if ($cleanupSafetyChanged) {
+            throw 'Updater key backup failed and automatic cleanup was stopped because storage identity or path safety changed. Stop and inspect both destination media manually.'
+        }
+        if ($cleanupFailed) {
+            throw 'Updater key backup failed and files created by this invocation could not be fully removed. Stop and inspect both destination media manually.'
+        }
+        throw $safeFailure
     }
 }

@@ -435,6 +435,9 @@ function Test-DeskPetPublicBetaEvidence {
         [Parameter(Mandatory)][string]$ExpectedInstallerSha256
     )
     $reasons = @()
+    if (-not (Test-DeskPetSchemaVersionOne -InputObject $Environment)) {
+        $reasons += 'schemaVersion must be the JSON integer 1'
+    }
     $commit = [string](Get-ObjectPropertyValue $Environment 'gitCommit')
     $version = [string](Get-ObjectPropertyValue $Environment 'expectedVersion')
     $artifact = Get-ObjectPropertyValue $Environment 'artifact'
@@ -499,6 +502,14 @@ function Get-ObjectPropertyValue {
     $property = $InputObject.PSObject.Properties[$Name]
     if ($null -eq $property) { return $null }
     return $property.Value
+}
+
+function Test-DeskPetSchemaVersionOne {
+    param([Parameter(Mandatory)][AllowNull()][object]$InputObject)
+    $value = Get-ObjectPropertyValue $InputObject 'schemaVersion'
+    $isJsonInteger = $value -is [System.Int32] -or $value -is [System.Int64] -or
+        $value -is [System.Int16] -or $value -is [System.Byte]
+    return $isJsonInteger -and [System.Int64]$value -eq 1
 }
 
 function Join-NativeFileSystemPath {

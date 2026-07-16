@@ -2,6 +2,23 @@
 
 当前 updater 基础为 `INTEGRATED / NOT_CONFIGURED`。本清单用于自动化、临时测试签名和后续真实版本 A → B 验证；前两者不能替代真实端到端升级。
 
+两种升级证据必须严格区分：
+
+- `run-public-beta-qa.ps1 -Mode Upgrade` 直接依次运行 A、B 两个 NSIS 安装器，只验证覆盖安装兼容性；报告固定为 `evidenceType=direct_installer_overlay`。
+- `run-public-beta-qa.ps1 -Mode ApplicationUpdater` 只允许运行 A 安装器。B 安装器仅用于版本、哈希和签名校验，必须由 A 的 About/Update UI 发现、下载并安装；通过报告固定为 `evidenceType=application_updater_e2e`。
+
+Public Beta Gate 的独立必需项 `application-updater-e2e` 只接受第二种报告，并同时要求来源报告、环境和检查项都是 `passed`。直接覆盖安装结果永远不能满足该项。
+
+提供外部生产公钥时，应用内 updater QA 会分别约束 A/B manifest 的 `artifactFile` 和 `signatureFile` 为纯文件名，将两个 artifact 的 SHA-256 分别绑定到传入的 A/B 安装包，并对 A、B 两组 artifact/`.sig` 都执行真实密码学验签；任意一组缺失、路径越界、哈希不符或验签失败都会在安装 A 之前终止。
+
+真实运行还会在安装 A 前从 A manifest 的 HTTPS endpoint 下载当前 `latest.json`，并将远端的 version、platform、URL、size 和 signature 严格绑定到本地候选 B 与外部生产公钥。`-WhatIf` 不联网，只明确记录这一真实运行计划。
+
+“应用内更新”证据必须按顺序观察到：A 仍在运行且注册表仍为 A 时写入 `pendingUpdateVersion=B`；随后 A PID 退出、B 的新 PID 与唯一 B 安装记录出现；最后 B 写入 `lastConfirmedUpdateVersion=B` 并清空 pending。轮询使用明确阶段机，逆序状态、只在 B 期间出现 pending、或只看到注册表版本/PID 均不得通过，因此操作员手动运行 B 安装器不能替代 updater UI 流程。
+
+Gate 会按汇总报告记录的相对路径和 SHA-256 重新读取 `application-updater-result.json`，并要求报告 schema 为真实 JSON 整数 `1`、`phase=completed`、`whatIf=false`、无失败对象且最终探针成功。它还会独立检查只执行 A、A/B 密码学验签、远端候选与本地 B 的文件名/大小/哈希绑定、有序 pending→restart→confirmed，以及 B 进程/安装记录、设置、完整导入角色包、精确启动项和开始菜单快捷方式全部通过。最小 synthetic raw、仅有标签的 summary 或字符串形式 schema 均不能通过。
+
+脚本在正常可解析的 `OutputDirectory` 中为路径校验和运行失败写入原始报告；若输出目录自身无法初始化，则尽最大可能改写到仓库忽略的安全 fallback 结果目录。失败消息会脱敏盘符正反斜杠路径、`file://` URI 与 UNC 路径，且返回非零退出码。
+
 ## 自动化与静态检查
 
 - [ ] Updater 与 Process 插件版本兼容当前 Tauri 2，并只注册一次。
@@ -52,6 +69,24 @@
 ## 真实版本 A → B
 
 在可恢复、可丢弃的 Windows 10/11 环境中，由用户确认后执行：
+
+先做无安装副作用的完整预览：
+
+```powershell
+.\scripts\windows\run-public-beta-qa.ps1 `
+  -Mode ApplicationUpdater `
+  -PreviousInstallerPath '<version-A-installer>' `
+  -InstallerPath '<version-B-installer-reference>' `
+  -PreviousUpdaterManifestPath '<version-A-updater-manifest>' `
+  -UpdaterManifestPath '<version-B-updater-manifest>' `
+  -UpdaterPublicKeyPath '<external-production-public-key>' `
+  -OutputDirectory '.\qa-results\public-beta-application-updater' `
+  -WhatIf
+```
+
+真实运行还必须在明确的可丢弃环境中设置 `DESK_PET_QA_CLEAN_ENVIRONMENT=1`。脚本安装并启动 A 后，会要求操作员先准备非敏感设置和测试角色，再在 A 的 UI 手工触发“检查 → 下载 → 安装”。脚本最多轮询 10 分钟，验证 A 记录出现、A PID 退出、B 记录出现、新 PID 启动、单一卸载记录、设置/角色保持及启动项不重复；它不会启动传入的 B 安装器路径。
+
+默认在通过后保留 B 供人工检查。只有显式增加 `-UninstallAfterUpdate` 才会在操作员通过托盘正常退出 B 后运行注册卸载器，并使用既有的最长 60 秒有界清理轮询；失败时不自动删除文件或注册表来制造通过结果。无论成功、失败或 `-WhatIf`，原始结果都写入 `application-updater-result.json`。
 
 1. 安装真实版本 A，记录安装包哈希、签名、公钥指纹、安装记录和进程。
 2. 修改窗口位置、缩放、自动启动和自动检查，并导入一个测试角色包。

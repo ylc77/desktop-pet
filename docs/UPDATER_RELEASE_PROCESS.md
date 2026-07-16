@@ -1,6 +1,8 @@
 # Updater 发布流程
 
-本文描述已集成但尚未投入公开使用的更新发布基础。当前应用版本为 `0.1.0`，生产 updater 密钥和 endpoint 未配置，Windows Authenticode 为 `NotSigned`，所以只能执行普通构建、脚本预览和不触发安装的测试。
+> 当前决策（2026-07-16）：本轮仅保留禁用状态下的发布基础与安全校验，不生成生产密钥、不制作加密备份、不发布签名更新。后续手动更新流程将另行设计，在此之前不得启用生产 updater 配置。
+
+本文描述已集成但尚未投入公开使用的更新发布基础。当前应用版本为 `0.1.0`，二进制托管已选择 `ylc77/desktop-pet` 的 GitHub Releases；GitHub Pages 只是元数据托管建议，仍待所有者明确确认和实现。正式配置保持禁用，Production endpoint 尚未部署，Windows Authenticode 为 `NotSigned`。因此目前只能执行普通构建、脚本预览和不触发安装的测试。
 
 ## 两类构建
 
@@ -35,6 +37,32 @@ npm run build:release
 4. 正式公钥和 HTTPS endpoint 已由项目所有者确认，未使用示例值或本地地址。
 5. Production updater 配置、capability、`passive` 安装模式与秘密扫描全部通过。
 6. 当前版本 Gate 和已知问题已更新；没有把历史 QA 当成候选 commit 的结果。
+
+## GitHub Releases 发布编排
+
+GitHub 托管契约见 [Updater 托管](UPDATER_HOSTING.md)。配置草案 `config/updater.github-releases.json` 当前 `enabled: false`、`metadata.ownerConfirmed: false`，不包含公钥正文或任何秘密。前者阻止远端编排，后者明确表示 Pages 元数据方案尚未获所有者确认。
+
+本地版本目录准备完毕后，先运行 `plan-github-release.ps1 -WhatIf`。预检必须同时确认：
+
+1. `gh` 已登录 `github.com`，目标仓库精确为 `ylc77/desktop-pet`、可见性为 `PUBLIC`，操作者至少有 `WRITE` 权限；报告只记录脱敏 login。
+2. 本地 `origin` 精确指向目标仓库，Git 工作区干净，manifest 的 commit 与当前 HEAD 一致、已经存在于目标 GitHub 仓库且 `dirtyWorktree=false`。
+3. 目标版本严格高于基础版本；tag 为 `v<完整 SemVer>`，安装包名包含相同版本。
+4. 安装包、`.sig`、`latest.json`、manifest 的文件名、size、SHA-256、URL 和公钥指纹完全一致。
+5. 使用指定仓库外公钥对最终安装包做真实验签。
+6. 目标 tag、draft/published release 和全部同名资产尚不存在；任意只读查询失败都会关闭 Gate。
+7. Release 计划为 draft + prerelease，资产 URL 固定到版本 tag；没有使用 `/releases/latest` 或滚动安装包别名。
+
+预检结果中的 `GateSatisfied` 只有全部项目通过、总体配置启用且元数据方案由所有者明确确认后才可能为 true。`-ConfirmPlan` 只把结果提升为 `ValidatedLocalPlan`；脚本没有创建 Release、上传文件、发布 Pages 或推送 Git 的能力。
+
+后续获得单独远端写入授权后，操作顺序必须是：建立版本化 draft prerelease、上传精确资产、运行 `verify-github-release-assets.ps1` 从远端重新下载并复核、发布 prerelease、从匿名环境再次验证公开 URL。若所有者届时另行确认并启用 GitHub Pages，才在一次 Pages 部署中加入版本快照并更新稳定 beta 元数据。任何验证失败都停止在更新稳定元数据之前。
+
+GitHub prerelease 不使用 `/releases/latest`。稳定 endpoint 固定为：
+
+```text
+https://ylc77.github.io/desktop-pet/updater/beta/latest.json
+```
+
+该地址目前只是建议方案，尚未得到所有者明确确认且未部署，不得在正式签名构建中启用。
 
 ## 生成与验证元数据
 

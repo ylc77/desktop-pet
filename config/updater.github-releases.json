@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "enabled": false,
+  "provider": "github-releases",
+  "repository": "ylc77/desktop-pet",
+  "identifier": "dev.deskpet.framework",
+  "channel": "beta",
+  "platform": "windows-x86_64",
+  "installMode": "passive",
+  "release": {
+    "tagPrefix": "v",
+    "draft": true,
+    "prerelease": true,
+    "immutableVersionedAssets": true
+  },
+  "metadata": {
+    "provider": "github-pages",
+    "ownerConfirmed": false,
+    "endpoint": "https://ylc77.github.io/desktop-pet/updater/beta/latest.json",
+    "versionedEndpointTemplate": "https://ylc77.github.io/desktop-pet/updater/beta/{version}/latest.json",
+    "publishAfterRemoteVerification": true
+  },
+  "status": "Disabled for this phase: no production signing key, encrypted backup, signed updater asset, or metadata deployment will be created. GitHub Releases binary hosting is confirmed; GitHub Pages metadata remains an unconfirmed proposal."
+}

@@ -11,6 +11,7 @@ $InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
+. "$PSScriptRoot\public-beta-common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
 if ([string]::IsNullOrWhiteSpace($ResultsRoot)) { $ResultsRoot = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta') }
 $root = Resolve-CallerPath -Path $ResultsRoot -BaseDirectory $InvocationDirectory
@@ -57,6 +58,7 @@ $requirements = @(
     @{id='webview2-online';title='WebView2 missing with network'},
     @{id='webview2-offline';title='WebView2 missing without network'},
     @{id='upgrade-0.1x';title='Upgrade from an older 0.1.x installer'},
+    @{id='application-updater-e2e';title='Application updater end-to-end A to B'},
     @{id='settings-migration';title='Settings preservation and migration'},
     @{id='no-duplicates';title='No duplicate startup or uninstall records'},
     @{id='single-instance';title='Single instance'},
@@ -80,7 +82,11 @@ if ([System.IO.Directory]::Exists($root)) {
 }
 $parsedEnvironments = @($environmentFiles | ForEach-Object {
     $environmentFile = $_
-    try { Get-Content -LiteralPath $environmentFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json }
+    try {
+        $parsedEnvironment = Get-Content -LiteralPath $environmentFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        $parsedEnvironment | Add-Member -NotePropertyName _evidenceDirectory -NotePropertyValue $environmentFile.DirectoryName -Force
+        $parsedEnvironment
+    }
     catch { [pscustomobject]@{ environmentId=$environmentFile.FullName.Substring($root.Length).TrimStart('\'); status='failed'; checks=@(); notes=@('Invalid environment result JSON.') } }
 })
 $environments = @($parsedEnvironments | Group-Object -Property environmentId | ForEach-Object {
@@ -139,7 +145,32 @@ foreach ($requirement in $requirements) {
     foreach ($environment in $validEnvironments) {
         foreach ($check in @($environment.checks)) {
             if ([string]$check.requirementId -eq $requirement.id) {
-                $evidence += [pscustomobject]@{ environmentId=$environment.environmentId; status=[string]$check.status; details=[string]$check.details }
+                if ($requirement.id -eq 'application-updater-e2e') {
+                    $applicationUpdaterValidation = Test-PublicBetaApplicationUpdaterEvidence -Environment $environment -Check $check `
+                        -EnvironmentDirectory ([string](Get-ObjectPropertyValue $environment '_evidenceDirectory'))
+                    if ($applicationUpdaterValidation.Valid) {
+                        $evidence += [pscustomobject]@{ environmentId=$environment.environmentId; status='passed'; details=[string]$check.details }
+                    } else {
+                        $submittedEvidenceType = [string](Get-ObjectPropertyValue $environment 'evidenceType')
+                        $submittedSourceStatus = [string](Get-ObjectPropertyValue $environment 'sourceReportStatus')
+                        $submittedEnvironmentStatus = [string](Get-ObjectPropertyValue $environment 'status')
+                        $submittedCheckStatus = [string](Get-ObjectPropertyValue $check 'status')
+                        $rejectedStatus = if ($submittedEvidenceType -ne 'application_updater_e2e') {
+                            'not_executed'
+                        } elseif ('failed' -in @($submittedSourceStatus, $submittedEnvironmentStatus, $submittedCheckStatus)) {
+                            'failed'
+                        } else {
+                            'blocked'
+                        }
+                        $evidence += [pscustomobject]@{
+                            environmentId=$environment.environmentId
+                            status=$rejectedStatus
+                            details="Rejected as application updater E2E evidence: $($applicationUpdaterValidation.Reasons -join '; ')"
+                        }
+                    }
+                } else {
+                    $evidence += [pscustomobject]@{ environmentId=$environment.environmentId; status=[string]$check.status; details=[string]$check.details }
+                }
             }
         }
     }
