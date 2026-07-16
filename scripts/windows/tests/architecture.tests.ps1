@@ -32,6 +32,26 @@ try {
     $env:PROCESSOR_ARCHITECTURE = $null
     Test-ArchitectureCase 'Missing variables fall back to 64-bit OS' 'x64' { Get-NativeProcessorArchitecture -Is64BitOperatingSystem $true }
     Test-ArchitectureCase 'Missing variables fall back to 32-bit OS' 'x86' { Get-NativeProcessorArchitecture -Is64BitOperatingSystem $false }
+
+    $cimFacts = Get-QAOperatingSystemFacts -CimQuery {
+        [pscustomobject]@{ Caption='Test Windows'; Version='10.0.1'; BuildNumber='1'; OSArchitecture='64-bit' }
+    }
+    Test-ArchitectureCase 'OS facts use CIM data when available' 'cim|Test Windows|10.0.1|1|64-bit' {
+        '{0}|{1}|{2}|{3}|{4}' -f $cimFacts.source,$cimFacts.Caption,$cimFacts.Version,$cimFacts.BuildNumber,$cimFacts.OSArchitecture
+    }
+
+    $fallbackFacts = Get-QAOperatingSystemFacts -CimQuery { throw [System.UnauthorizedAccessException]::new('access denied') }
+    Test-ArchitectureCase 'OS facts fall back when CIM access is denied' 'environment-fallback' { [string]$fallbackFacts.source }
+    Test-ArchitectureCase 'OS fallback has a version' $true { -not [string]::IsNullOrWhiteSpace([string]$fallbackFacts.Version) }
+    Test-ArchitectureCase 'OS fallback has a native architecture' $true { -not [string]::IsNullOrWhiteSpace([string]$fallbackFacts.OSArchitecture) }
+
+    $emptyFacts = Get-QAOperatingSystemFacts -CimQuery { @() }
+    Test-ArchitectureCase 'OS facts fall back when CIM returns no record' 'environment-fallback' { [string]$emptyFacts.source }
+
+    $runQaText = Get-Content -LiteralPath ([System.IO.Path]::Combine($PSScriptRoot, '..', 'run-qa-suite.ps1')) -Raw -Encoding UTF8
+    Test-ArchitectureCase 'QA environment capture uses the resilient OS helper' $true {
+        $runQaText -match 'os=Get-QAOperatingSystemFacts' -and $runQaText -notmatch 'Get-CimInstance\s+Win32_OperatingSystem'
+    }
 } finally {
     $env:PROCESSOR_ARCHITEW6432 = $savedW6432
     $env:PROCESSOR_ARCHITECTURE = $savedArchitecture

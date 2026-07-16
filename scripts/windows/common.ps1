@@ -493,6 +493,37 @@ function Get-CurrentProcessArchitecture {
     return 'x86'
 }
 
+function Get-QAOperatingSystemFacts {
+    param(
+        [scriptblock]$CimQuery = { Get-CimInstance Win32_OperatingSystem -ErrorAction Stop }
+    )
+
+    $record = $null
+    try {
+        $record = @(& $CimQuery)[0]
+    } catch {
+        $record = $null
+    }
+
+    if ($null -ne $record) {
+        return [ordered]@{
+            Caption=[string](Get-ObjectPropertyValue $record 'Caption')
+            Version=[string](Get-ObjectPropertyValue $record 'Version')
+            BuildNumber=[string](Get-ObjectPropertyValue $record 'BuildNumber')
+            OSArchitecture=[string](Get-ObjectPropertyValue $record 'OSArchitecture')
+            source='cim'
+        }
+    }
+
+    return [ordered]@{
+        Caption=[Environment]::OSVersion.VersionString
+        Version=[Environment]::OSVersion.Version.ToString()
+        BuildNumber=[Environment]::OSVersion.Version.Build.ToString()
+        OSArchitecture=Get-NativeProcessorArchitecture
+        source='environment-fallback'
+    }
+}
+
 function Get-ObjectPropertyValue {
     param(
         [Parameter(Mandatory)][AllowNull()][object]$InputObject,

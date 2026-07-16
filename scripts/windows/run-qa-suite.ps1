@@ -162,7 +162,7 @@ try {
     $currentPhase = 'environment-capture'
     $environment = [ordered]@{
         capturedAtUtc=[DateTime]::UtcNow.ToString('o'); mode=$Mode; computerName=$env:COMPUTERNAME
-        os=(Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber,OSArchitecture)
+        os=Get-QAOperatingSystemFacts
         powershell=$PSVersionTable.PSVersion.ToString(); nativeProcessorArchitecture=Get-NativeProcessorArchitecture
         is64BitOperatingSystem=[System.Environment]::Is64BitOperatingSystem; processArchitecture=Get-CurrentProcessArchitecture
         is64BitProcess=[System.Environment]::Is64BitProcess; webView2=$null; testEnvironments=$null
