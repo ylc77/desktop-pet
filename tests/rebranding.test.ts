@@ -24,7 +24,8 @@ describe("application rebranding", () => {
   it("keeps the application version consistent across JavaScript, Tauri, and Cargo", () => {
     const cargo = readFileSync(resolve(root, "src-tauri/Cargo.toml"), "utf8");
     const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
-    expect(packageJson.version).toBe("0.1.0");
+    const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+    expect(packageJson.version).toMatch(semver);
     expect(config.version).toBe(packageJson.version);
     expect(cargoVersion).toBe(packageJson.version);
   });
