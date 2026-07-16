@@ -156,7 +156,7 @@ describe("AppearanceCenter", () => {
     render(<AppearanceCenter api={api} />);
     const oldPreview = await screen.findByAltText("官方占位 预览");
     fireEvent.error(oldPreview);
-    expect(screen.getByLabelText("没有预览图")).toBeInTheDocument();
+    expect(await screen.findByLabelText("没有预览图")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
 
