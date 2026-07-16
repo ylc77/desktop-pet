@@ -5,7 +5,7 @@
 ### 生产自动更新尚未配置和端到端验证
 
 - 状态：`BLOCKED`，阻塞公开测试版。
-- 当前基础：Tauri 2 Updater/Process、更新状态与用户入口已经集成；普通构建保持 `NOT_CONFIGURED` 且不联网。发布工具已实现 artifact + `.sig` + 外部公钥的真实密码学验签，并校验元数据的精确版本、URL 文件名和实际 `size`。
+- 当前基础：Tauri 2 Updater/Process、一次点击的更新流程、`postponed`/`skipped`/`restartFailed` 状态与用户入口已经集成；普通构建保持 `NOT_CONFIGURED` 且不联网。发布工具已实现隔离产物选择、严格元数据校验及 artifact + `.sig` + 外部公钥的真实密码学验签。
 - 缺失：生产 updater 私钥与至少两份备份、正式公钥、用户确认的 HTTPS endpoint、最终 `.sig`/`latest.json`，以及两个真实版本的下载、安装、重启和数据保留验证。
 - 注意：工具验签能力、临时测试密钥或普通 Release 构建通过都不能作为生产更新已可用的证据。不得填写虚假 URL、禁用签名验证或提前上传安装包。
 

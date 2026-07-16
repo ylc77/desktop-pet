@@ -2,7 +2,7 @@
 
 本清单是 `0.1.0` 公开测试版 Gate 的唯一状态总表。状态只能填写 `passed`、`failed`、`blocked` 或 `not_executed`，并必须附带环境结果 JSON 或真实人工记录。自动化、当前机器、Sandbox、Windows 10 VM、Windows 11 VM 和真实硬件结果不得互相替代。
 
-当前结论：**BLOCKED / NOT_READY**。`0.1.0` 已接入安全更新与公开测试最小功能基础，发布工具已经可以对 artifact、`.sig` 和外部公钥做真实密码学验签，并校验 `latest.json` 的版本、URL 文件名和实际 `size`；但生产 updater 公钥和 HTTPS endpoint 尚未配置，两个真实版本升级尚未执行，Windows Authenticode 仍为 `NotSigned`。不得把工具能力、普通构建或临时签名测试标记为公开自动更新可用，也不创建正式 beta 标签或公开测试版目录。
+当前结论：**BLOCKED / NOT_READY**。`0.1.0` 已接入安全更新与公开测试最小功能基础，发布工具已经可以隔离构建产物、严格校验 `latest.json`，并在唯一临时 target 中构建验证器，对 artifact、`.sig` 和外部公钥做真实密码学验签；但生产 updater 密钥和 HTTPS endpoint 尚未配置，真实 A → B 尚未执行，Windows Authenticode 仍为 `NotSigned`。不得把工具能力、普通构建或临时签名测试标记为公开自动更新可用，也不创建正式 beta 标签或公开测试版目录。
 
 ## A. 必须通过
 
@@ -37,7 +37,7 @@
 ## B. 强烈建议
 
 - [ ] 可信 Windows 代码签名、SHA-256 摘要和时间戳。
-- [ ] 生产 Tauri Updater 私钥的非空密码、仓库外存储与至少两份离线备份。
+- [ ] 生产 Tauri Updater 私钥的至少 16 字符密码、无 reparse point 的仓库外存储与至少两份离线备份。
 - [ ] 记录真实 SmartScreen 首次下载体验。
 - [ ] Defender 之外的误报检查；不得上传私人构建，除非用户明确授权。
 - [ ] Windows 10/11 各自独立干净 VM、普通用户和管理员权限对比。
@@ -61,4 +61,4 @@
 .\scripts\windows\audit-public-beta-readiness.ps1
 ```
 
-Updater 专项清单见 [UPDATER_QA.md](UPDATER_QA.md)。审核必须显式接收仓库外生产公钥并真实验证安装包签名；若检测到 `NOT_CONFIGURED`、缺少 `.sig`/`latest.json`、签名未通过、Windows `NotSigned` 风险或没有 A → B 真实证据，必须保留对应 `blocked`/`failed`/`not_executed` 状态，不得通过手工改报告绕过。
+Updater 专项清单见 [UPDATER_QA.md](UPDATER_QA.md)。审核必须显式接收仓库外生产公钥并真实验证安装包签名；远端发布后还必须通过 `-ReleaseExpectation Present -Anonymous` 复核公开资产。若检测到 `NOT_CONFIGURED`、缺少 `.sig`/`latest.json`、签名未通过、Windows `NotSigned` 风险或没有 A → B 真实证据，必须保留对应 `blocked`/`failed`/`not_executed` 状态，不得通过手工改报告绕过。

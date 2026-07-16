@@ -27,30 +27,41 @@ Gate 会按汇总报告记录的相对路径和 SHA-256 重新读取 `applicatio
 - [ ] 签名构建 overlay 设置 `createUpdaterArtifacts=true` 和 Windows `passive`。
 - [ ] 缺 endpoint 或公钥时状态为 `NOT_CONFIGURED`，启动不发请求，手动检查给出明确提示。
 - [ ] Production 只接受 HTTPS，拒绝 HTTP、示例域名、本地地址和空公钥。
-- [ ] 私钥不在仓库、tracked/staged diff、Release、QA 或日志中。
-- [ ] `latest.json` 为 UTF-8 无 BOM、有效 SemVer，signature 与 `.sig` 正文一致，`platforms.<target>.size` 等于安装包实际字节数。
+- [ ] 私钥不在仓库、tracked/staged blob、Release、QA 或日志中；staged 扫描读取 Git index 内容而非工作区同名文件，并识别默认生产私钥绝对路径但不输出其正文。
+- [ ] 秘密扫描遇到超过 10 MiB 的候选文本时安全失败，不静默跳过；报告只包含风险类别和脱敏位置。
+- [ ] 私钥与公钥路径任一级存在符号链接、目录联接、挂载目录或其他 reparse point 时安全失败；生产密码少于 16 个字符时拒绝继续。
+- [ ] 初始化密钥使用唯一 staging，先发布公钥、最后发布私钥；失败清理只处理哈希仍匹配本次生成内容的文件。
+- [ ] `latest.json` 为 UTF-8 无 BOM、有效 SemVer，signature 与 `.sig` 正文一致，`platforms.<target>.size` 等于安装包实际字节数；缺失/额外属性、错误 JSON 类型和非 RFC 3339 `pub_date` 都会失败。
 - [ ] 安装包文件名包含精确目标版本；下载 URL 末段与实际版本化文件名完全相同；`.sig` 文件名严格为 `<安装包>.sig`。
 - [ ] `create`、确认执行后的 `prepare`、签名 `build` 和 `verify-release-artifacts -RequireUpdater` 都用外部公钥对实际安装包与 `.sig` 做真实密码学验签；错误公钥或篡改文件失败。
+- [ ] 每次验签都在唯一临时 target 运行 `cargo build --release --offline --locked`，不信任预先存在的缓存验证器 EXE，结束后清理临时目录。
+- [ ] 签名构建使用隔离 `CARGO_TARGET_DIR`，只接受本次生成且精确匹配产品名、版本和架构的安装包，复制后再次验签；共享 target 中的旧产物不能被选中。
+- [ ] 调用 `.cmd`/`.bat` 时拒绝引号、换行及 `&|<>^()%!` 等 cmd 元字符，不能把不可信参数拼成可执行命令行。
 - [ ] `validate-latest-json` 的 artifact/signature/public-key 三件套只能全部提供或全部省略；生产 QA 必须全部提供并得到 `CryptographicSignatureVerified=true`。
 - [ ] manifest commit 与 HEAD 一致，公钥指纹存在，不含私钥信息或绝对路径。
+- [ ] 长构建和发布准备使用单一公钥 snapshot，并复核私钥哈希、Git HEAD、tracked diff 及未跟踪文件内容；运行中替换外部 key 或改变工作树必须失败。
 - [ ] 版本 A/B 不同且 B > A，identifier 与 updater 公钥相同。
+- [ ] 稳定 `latest.json` 指针只在版本快照和全部资产验证通过后以同目录临时文件原子替换；失败不会截断或覆盖当前可用指针，提交后的备份清理异常也不会删除已发布版本目录或形成悬空指针。
+- [ ] draft 资产验证与发布后的 `-ReleaseExpectation Present -Anonymous` 验证分开；匿名验证不依赖本机 GitHub 登录状态。
 
 ## 状态机与 UI 单元测试
 
 - [ ] 无更新、相同版本和低版本不会提示升级；预发布 SemVer 比较正确。
 - [ ] 发现更高版本显示当前/目标版本、发布日期、说明和可用大小。
-- [ ] 自动检查最多每 24 小时一次，手动检查绕过节流。
-- [ ] 稍后提醒与跳过当前版本有效；更高版本仍提示；手动检查可看见跳过版本。
+- [ ] 启动自动检查固定延迟 15 秒且最多每 24 小时一次，手动检查绕过节流；关闭开关后重启仍保持关闭。
+- [ ] 稍后提醒进入 `postponed`，跳过当前版本进入 `skipped`；更高版本仍提示；手动检查可看见跳过版本。
 - [ ] 重复检查合并；下载中不再次检查；同一时间只有一个下载任务。
 - [ ] 已知长度、未知长度、下载中断和取消状态正确，不伪造 100%。
 - [ ] 404、超时、非法 JSON、空 signature、签名错误、权限错误和安装失败分类正确。
 - [ ] 自动失败只写脱敏日志，手动失败显示简洁错误且可以重试。
+- [ ] 单击一次“立即更新”依次完成下载、验证、严格保存、安装和终止式 NSIS 交接，不要求第二次点击“立即安装”。
 - [ ] 严格设置写入或安装前日志刷新失败会阻止安装，旧应用继续运行，`pendingUpdateVersion` 不留下伪成功值。
 - [ ] Windows 正常路径由 updater 启动 passive NSIS 后终止式交接，`on_before_exit` 执行日志刷新和应用清理，旧进程不残留；NSIS 自动启动新版本。
-- [ ] 安装失败不重启；安装命令异常返回时才使用受控 relaunch 后备；新进程按实际版本确认并清理 pending，且不会形成重启循环。
+- [ ] 安装失败不重启；安装命令异常返回时才使用受控 relaunch 后备；兜底失败分类为 `restartFailed`，重试只 relaunch、不再次安装。
+- [ ] 新进程只有在实际版本等于目标版本时才清理 pending；失败目标持久化且只提示一次，后续成功确认会清理 pending 和失败标记。
 - [ ] 更新前刷新设置；更新后保留位置、缩放、角色、自动启动和更新偏好。
 - [ ] 关闭面板不丢任务；React 卸载后不 setState；退出清理监听器。
-- [ ] About 版本正确，主窗口右键、托盘和设置入口指向同一更新任务。
+- [ ] About 显示白猫应用图标、正确版本和自动检查开关；主窗口右键、托盘和设置入口指向同一更新任务。
 - [ ] Production 不显示内部 updater 调试入口。
 
 ## 临时签名集成测试

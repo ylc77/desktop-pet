@@ -1,6 +1,6 @@
 # Updater 发布流程
 
-> 当前决策（2026-07-16）：本轮仅保留禁用状态下的发布基础与安全校验，不生成生产密钥、不制作加密备份、不发布签名更新。后续手动更新流程将另行设计，在此之前不得启用生产 updater 配置。
+> 当前决策（2026-07-16）：本轮只完善禁用状态下的应用内更新基础与安全校验，不生成生产密钥、不输入生产密码、不制作加密备份、不配置 Production endpoint，也不创建、修改或上传任何远端 Release。获得新的明确授权前不得启用生产 updater 配置。
 
 本文描述已集成但尚未投入公开使用的更新发布基础。当前应用版本为 `0.1.0`，二进制托管已选择 `ylc77/desktop-pet` 的 GitHub Releases；GitHub Pages 只是元数据托管建议，仍待所有者明确确认和实现。正式配置保持禁用，Production endpoint 尚未部署，Windows Authenticode 为 `NotSigned`。因此目前只能执行普通构建、脚本预览和不触发安装的测试。
 
@@ -12,7 +12,7 @@
 npm run build:release
 ```
 
-`src-tauri/tauri.updater.conf.json` 记录签名构建的 `createUpdaterArtifacts: true` 契约。`build-signed-update.ps1` 实际在 `%TEMP%` 生成一次性 Tauri 配置叠加，加入经验证的 HTTPS endpoint、公钥与 `passive` 安装模式，并在 `finally` 删除。运行时 Rust 封装通过本次构建进程的 `QIJIANG_UPDATER_ENDPOINT` 和 `QIJIANG_UPDATER_PUBLIC_KEY` 固化同一组公开配置；缺任意一项即保持 `NOT_CONFIGURED`。签名构建只能在生产密钥和 endpoint 经用户确认后运行。
+`src-tauri/tauri.updater.conf.json` 记录签名构建的 `createUpdaterArtifacts: true` 契约。`build-signed-update.ps1` 实际在 `%TEMP%` 生成一次性 Tauri 配置叠加，加入经验证的 HTTPS endpoint、公钥与 `passive` 安装模式，并在 `finally` 删除。构建使用唯一的隔离 `CARGO_TARGET_DIR`，只接受精确产品名、版本和架构对应且由本次运行生成的安装包，复制后再验签；不会从共享 target 目录按时间选择可能过期的产物。外部公钥只读取一次并写入本次运行专属 snapshot，overlay、运行时配置、manifest 指纹和密码学验签都使用该 snapshot；私钥在长构建前后复核 SHA-256，Git HEAD、tracked diff 和未跟踪文件内容也在原子发布前复核。运行时 Rust 封装通过本次构建进程的 `QIJIANG_UPDATER_ENDPOINT` 和 `QIJIANG_UPDATER_PUBLIC_KEY` 固化同一组公开配置；缺任意一项即保持 `NOT_CONFIGURED`。签名构建只能在生产密钥和 endpoint 经用户确认后运行。
 
 预览签名构建，不生成密钥、不签名、不上传：
 
@@ -27,13 +27,13 @@ npm run build:release
   -WhatIf
 ```
 
-实际参数以脚本帮助为准。省略 `-PublicKeyPath` 时，签名构建只会尝试私钥旁的 `<私钥>.pub`；正式发布建议始终显式传入。密码只能安全交互输入或存在于当前进程环境变量，不得写在命令行中。确认执行后的签名构建会用仓库内的离线验证器对最终安装包、`.sig` 和该公钥做真实 Minisign 验签，验证失败不会生成发布目录。
+实际参数以脚本帮助为准。省略 `-PublicKeyPath` 时，签名构建只会尝试私钥旁的 `<私钥>.pub`；正式发布建议始终显式传入。生产密码至少 16 个字符，只能安全交互输入或存在于当前进程环境变量，不得写在命令行中。私钥和公钥路径的任一级都不能是 reparse point。密钥初始化先在唯一外部 staging 文件中生成和验证，再先发布非秘密公钥、最后发布私钥；失败清理只删除哈希仍与本次生成内容一致的已发布文件。确认执行后的签名构建会用仓库内的离线验证器对最终安装包、`.sig` 和公钥 snapshot 做真实 Minisign 验签；验证器每次都在唯一临时 target 中执行 `cargo build --release --offline --locked`，不会信任或复用缓存 EXE，结束后清理临时目录。验签失败不会生成发布目录。
 
 ## 发布前检查
 
 1. 工作区为预期 commit，无未审查更改；版本来自 Tauri 配置并与 `package.json`、`Cargo.toml`、`Cargo.lock` 一致。
 2. identifier 保持 `dev.deskpet.framework`，角色协议保持 `schemaVersion: 1`。
-3. 正式私钥位于仓库外，非空密码与至少两份离线备份已确认。
+3. 正式私钥位于仓库外，私钥/公钥路径没有 reparse point，至少 16 个字符的生产密码与至少两份离线备份已确认。
 4. 正式公钥和 HTTPS endpoint 已由项目所有者确认，未使用示例值或本地地址。
 5. Production updater 配置、capability、`passive` 安装模式与秘密扫描全部通过。
 6. 当前版本 Gate 和已知问题已更新；没有把历史 QA 当成候选 commit 的结果。
@@ -54,7 +54,7 @@ GitHub 托管契约见 [Updater 托管](UPDATER_HOSTING.md)。配置草案 `conf
 
 预检结果中的 `GateSatisfied` 只有全部项目通过、总体配置启用且元数据方案由所有者明确确认后才可能为 true。`-ConfirmPlan` 只把结果提升为 `ValidatedLocalPlan`；脚本没有创建 Release、上传文件、发布 Pages 或推送 Git 的能力。
 
-后续获得单独远端写入授权后，操作顺序必须是：建立版本化 draft prerelease、上传精确资产、运行 `verify-github-release-assets.ps1` 从远端重新下载并复核、发布 prerelease、从匿名环境再次验证公开 URL。若所有者届时另行确认并启用 GitHub Pages，才在一次 Pages 部署中加入版本快照并更新稳定 beta 元数据。任何验证失败都停止在更新稳定元数据之前。
+后续获得单独远端写入授权后，操作顺序必须是：建立版本化 draft prerelease、上传精确资产、运行 `verify-github-release-assets.ps1` 从远端重新下载并复核、发布 prerelease，再用 `-ReleaseExpectation Present -Anonymous` 从未登录路径验证公开资产。若所有者届时另行确认并启用 GitHub Pages，才在一次 Pages 部署中加入版本快照，并以同目录临时文件加原子替换更新稳定 beta 指针。任何验证失败都停止在更新稳定元数据之前。
 
 GitHub prerelease 不使用 `/releases/latest`。稳定 endpoint 固定为：
 
@@ -106,9 +106,9 @@ https://ylc77.github.io/desktop-pet/updater/beta/latest.json
 
 `validate-latest-json.ps1` 的三件套参数 `-ArtifactPath`、`-SignaturePath`、`-PublicKeyPath` 必须同时提供或同时省略。省略时只做元数据结构检查，`CryptographicSignatureVerified` 明确为 `false`；生产验证必须提供三件套。
 
-生产验证必须确认：有效 SemVer、新版本严格更高、安装包文件名包含精确目标版本、下载 URL 的末段与安装包文件名完全相同、`.sig` 文件名为 `<安装包文件名>.sig`、`signature` 等于 `.sig` 正文、`platforms.<target>.size` 等于安装包实际字节数、JSON 为 UTF-8 无 BOM且可重新解析，并由指定公钥对指定安装包做真实密码学验签。错误公钥、篡改安装包、元数据签名不一致、URL 别名或大小不一致都会失败。
+生产验证必须确认：有效 SemVer、新版本严格更高、安装包文件名包含精确目标版本、下载 URL 的末段与安装包文件名完全相同、`.sig` 文件名为 `<安装包文件名>.sig`、`signature` 等于 staging 中 `.sig` 副本的正文、`platforms.<target>.size` 等于 staging 安装包的实际字节数、JSON 为 UTF-8 无 BOM且可重新解析，并由同一公钥 snapshot 对指定安装包做真实密码学验签。验证器还会拒绝缺失或额外顶层/平台属性、JSON 类型错误以及不符合 RFC 3339 的 `pub_date`；不能依靠 PowerShell 的宽松类型转换接受近似值。错误公钥、篡改安装包、元数据签名不一致、URL 别名或大小不一致都会失败。版本目录完成原子移动后不会在指针恢复异常中自动删除；稳定 `latest.json` 替换已经提交时，备份清理失败只作为 `PointerCleanupPending` 返回，不能被 `WarningAction Stop` 转换成悬空指针。
 
-`prepare-updater-release.ps1 -WhatIf` 只展示计划，不编译或写入离线验证器，因此会明确报告“确认后必须验签”；它不应被记录为密码学验证通过。确认执行后的 `prepare`、签名 `build`、独立 `create` 以及生产 Gate 都会复用同一离线验证器。发布目录准备完成后运行：
+`prepare-updater-release.ps1 -WhatIf` 只展示计划，不编译或写入离线验证器，因此会明确报告“确认后必须验签”；它不应被记录为密码学验证通过。确认执行后的 `prepare`、签名 `build`、独立 `create` 以及生产 Gate 都会调用同一验证逻辑，但每次在唯一临时 target 中用 `cargo build --release --offline --locked` 重新构建并使用验证器，不接受仓库或共享 target 中的缓存 EXE。发布目录准备完成后运行：
 
 ```powershell
 .\scripts\windows\verify-release-artifacts.ps1 `
@@ -141,7 +141,7 @@ Release manifest 记录版本、相对产物名、文件大小、SHA-256、Git c
 
 真实流程包括安装 A、修改设置、导入测试角色、托管 B、从 A 检查/下载/安装/重启、核对 B 版本与数据保留、确认单实例/启动项/安装记录，最后卸载 B 并检查残留。以下动作必须再次获得用户确认：生成生产密钥、设置正式 endpoint、上传文件、真实安装 A、自动升级到 B、重启应用或 Windows。
 
-Windows 的正常更新路径是终止式交接：安装前先严格写入设置与 `pendingUpdateVersion`，写入失败立即阻止安装；Tauri Updater 启动 `passive` NSIS 后触发 `on_before_exit`，刷新日志并执行应用清理，然后退出旧进程。NSIS 完成替换后自动启动新程序；新进程以实际应用版本确认 `pendingUpdateVersion` 并只清理一次待确认状态。前端 Process relaunch 只是在安装命令意外返回时的受控后备，不应把旧进程继续运行或一次普通 JS relaunch 当作 Windows 主路径。
+用户单击一次“立即更新”即授权下载、验证、严格保存和安装。Windows 的正常路径是终止式交接：安装前先严格写入设置与 `pendingUpdateVersion`，写入失败立即阻止安装；Tauri Updater 启动 `passive` NSIS 后触发 `on_before_exit`，刷新日志并执行应用清理，然后退出旧进程。NSIS 完成替换后自动启动新程序；只有实际应用版本等于 `pendingUpdateVersion` 时才清理待确认状态。确认失败会持久化目标版本且同一失败只提示一次。前端 Process relaunch 只是在安装命令意外返回时的受控后备；兜底重启失败归类为 `restartFailed`，重试只再次 relaunch，不会重复安装。
 
 ## Gate
 

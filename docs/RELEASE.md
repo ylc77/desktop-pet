@@ -22,7 +22,7 @@ Rust 测试 profile 不生成调试符号并关闭增量编译，以降低 Windo
 
 普通 `npm run build:release` 不需要生产密钥或 endpoint，主配置保持 `bundle.createUpdaterArtifacts: false`。当前 `0.1.0` 的安全更新基础已经接入，但生产公钥和 HTTPS endpoint 未配置；应用显示 `NOT_CONFIGURED`，启动时不访问更新服务。
 
-`src-tauri/tauri.updater.conf.json` 固定记录签名构建必须使用 `createUpdaterArtifacts: true` 的公开契约。实际签名工具在 `%TEMP%` 生成一次性配置叠加，写入经过验证的 HTTPS endpoint、公钥和 Windows `passive` 安装模式；完成后删除，不把正式 endpoint 或公钥伪造进普通配置。达到生成生产密钥、设置 endpoint、真实签名或上传步骤时必须先获得用户确认。
+`src-tauri/tauri.updater.conf.json` 固定记录签名构建必须使用 `createUpdaterArtifacts: true` 的公开契约。实际签名工具在 `%TEMP%` 生成一次性配置叠加，写入经过验证的 HTTPS endpoint、公钥和 Windows `passive` 安装模式；构建使用隔离 `CARGO_TARGET_DIR`，只接受本次生成且精确匹配产品、版本和架构的安装包，复制后再验签。完成后删除临时配置和 target，不把正式 endpoint 或公钥伪造进普通配置。达到生成生产密钥、设置 endpoint、真实签名或上传步骤时必须先获得用户确认。
 
 只做预览：
 
@@ -30,7 +30,7 @@ Rust 测试 profile 不生成调试符号并关闭增量编译，以降低 Windo
 .\scripts\updater\initialize-updater-key.ps1 -WhatIf
 ```
 
-签名构建与发布目录预览仍需要提供版本、用户确认的 HTTPS 地址、仓库外密钥路径和现有产物等必填参数；完整可复制模板见 [Updater 发布流程](UPDATER_RELEASE_PROCESS.md)。密码不得作为明文命令行参数。确认执行后的 create、prepare 和签名 build 会复用仓库内离线 Minisign 验证器；`prepare -WhatIf` 只报告确认后需要验签，不会生成验证器产物。密钥、托管与 QA 分别见 [密钥管理](UPDATER_KEY_MANAGEMENT.md)、[托管要求](UPDATER_HOSTING.md) 和 [Updater QA](UPDATER_QA.md)。
+签名构建与发布目录预览仍需要提供版本、用户确认的 HTTPS 地址、仓库外密钥路径和现有产物等必填参数；完整可复制模板见 [Updater 发布流程](UPDATER_RELEASE_PROCESS.md)。生产密码至少 16 个字符且不得作为明文命令行参数，私钥/公钥路径不得经过 reparse point。确认执行后的 create、prepare 和签名 build 使用相同的离线 Minisign 验证逻辑，但每次都在唯一临时 target 执行 `cargo build --release --offline --locked`，不信任缓存验证器 EXE；`prepare -WhatIf` 只报告确认后需要验签，不会生成验证器产物。调用批处理工具时会拒绝 cmd 元字符，避免把路径或参数拼成额外命令。密钥、托管与 QA 分别见 [密钥管理](UPDATER_KEY_MANAGEMENT.md)、[托管要求](UPDATER_HOSTING.md) 和 [Updater QA](UPDATER_QA.md)。
 
 ## 本机烟测脚本
 
@@ -71,7 +71,7 @@ Safe 模式只执行非破坏性构建、测试、哈希、签名状态、清单
 
 当前自动更新状态是 `INTEGRATED / NOT_CONFIGURED`。生产 updater 公钥或 endpoint 缺失、Updater 产物/元数据未生成，或两个真实版本升级未完成时，Public Beta Gate 必须报告 `BLOCKED`，不能因为普通构建通过而标记为 passed。
 
-生产 updater Release 的验证必须显式提供仓库外公钥，并要求真实密码学验签：
+生产 updater Release 的验证必须显式提供仓库外公钥，并要求真实密码学验签。签名工具只读取一次外部公钥并使用唯一 snapshot，同时在发布前复核私钥哈希和完整 Git 状态；发布准备的 size、signature、哈希与 `latest.json` 全部来自 staging 副本：
 
 ```powershell
 .\scripts\windows\verify-release-artifacts.ps1 `
@@ -83,7 +83,7 @@ Safe 模式只执行非破坏性构建、测试、哈希、签名状态、清单
   -UpdaterPublicKeyPath '<仓库外公钥路径>'
 ```
 
-Gate 同时绑定 `latest.json` 的精确版本、URL 文件名、`.sig` 文件名、实际 `size`、公钥指纹和安装包密码学签名；仅有 `.sig` 文件或指纹相等不能通过。Public Beta Audit 还要求真实环境证据，因此 updater 验签通过仍不代表可公开发布。
+Gate 同时绑定 `latest.json` 的精确版本、URL 文件名、`.sig` 文件名、实际 `size`、公钥指纹和安装包密码学签名，并严格拒绝额外/缺失属性、错误 JSON 类型与非 RFC 3339 日期；仅有 `.sig` 文件或指纹相等不能通过。秘密扫描读取 Git index 中 staged blob 的实际内容，遇到超过 10 MiB 的候选文本会安全失败，并识别默认生产私钥绝对路径而不输出它。Public Beta Audit 还要求真实环境证据，因此 updater 验签通过仍不代表可公开发布。
 
 成功构建并完成测试后运行：
 

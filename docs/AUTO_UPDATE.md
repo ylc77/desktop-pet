@@ -6,9 +6,9 @@
 
 - 更新渠道固定为 `beta`；普通用户暂时不能切换渠道。
 - 普通未配置构建不会在启动后请求网络。手动检查会明确显示“更新服务尚未配置”。
-- 配置完成后，启动自动检查会延迟 10–30 秒，并且最多每 24 小时一次；手动检查不受该节流限制。
+- 配置完成后，启动自动检查固定延迟 15 秒，并且最多每 24 小时一次；手动检查不受该节流限制。
 - 自动检查可以在设置中关闭。自动检查失败只写入脱敏日志，不弹出阻塞窗口。
-- 检查到新版本后由用户选择“立即更新”“稍后提醒”或“跳过此版本”。不会静默下载或静默安装。
+- 检查到新版本后由用户选择“立即更新”“稍后提醒”或“跳过此版本”。单击一次“立即更新”即明确授权下载、Tauri 签名验证、严格保存设置、安装和终止式 NSIS 交接；不会静默下载或静默安装。
 - 跳过只针对一个具体版本；更高版本仍会提示，手动检查仍可看见被跳过的版本。
 - 下载长度已知时显示真实进度；服务端不提供长度时显示不确定进度，不伪造百分比。
 
@@ -20,15 +20,18 @@ Rust 更新封装只在构建同时提供 `QIJIANG_UPDATER_ENDPOINT` 与 `QIJIAN
 
 `disabled` → `idle` → `checking` → `upToDate` 或 `available` → `downloading` → `readyToInstall` → `installing` → `restarting`
 
-“稍后提醒”保留 `available` 状态但不下载；用户明确取消尚未开始的 pending 更新时进入 `cancelled`；可恢复错误进入 `error`。重复点击会复用正在执行的检查，同一时间不会启动多个下载或安装任务。
+“稍后提醒”进入 `postponed`，“跳过此版本”进入 `skipped`，用户明确取消尚未开始的 pending 更新时进入 `cancelled`；可恢复错误进入 `error`。重启兜底失败分类为 `restartFailed`，重试只再次调用受控 relaunch，不会重复安装。重复点击会复用正在执行的检查，同一时间不会启动多个下载或安装任务。
 
 设置只保存更新策略和非敏感结果：
 
-- `lastCheckAt`
-- `lastAvailableVersion`
-- `skippedVersion`
-- `lastFailureCategory`
-- 自动检查开关
+- `automaticUpdateChecks`
+- `updateLastCheckAt`
+- `updateLastAvailableVersion`
+- `updateSkippedVersion`
+- `updateLastFailureCategory`
+- `pendingUpdateVersion`
+- `lastConfirmedUpdateVersion`
+- `updateLastFailedVersion`（用于让同一失败目标只提示一次）
 
 不会保存带 query 的完整下载 URL、访问令牌或签名私钥信息。
 
@@ -46,7 +49,7 @@ Rust 更新封装只在构建同时提供 `QIJIANG_UPDATER_ENDPOINT` 与 `QIJIAN
 
 Windows 更新安装模式为 `passive`。开始安装前，应用使用严格写入路径保存设置、窗口位置、缩放、当前角色 ID、更新偏好、`pendingUpdateVersion` 和必要日志；任何原生设置写入或日志刷新失败都会阻止安装，不会只写警告后继续。
 
-正常 Windows 路径是终止式安装交接：Tauri Updater 启动被动 NSIS，`on_before_exit` 刷新日志并执行应用退出清理，旧进程随后退出；NSIS 替换文件后自动启动新程序。只有安装命令在该路径之外返回时，受控 Process relaunch 才作为后备。新进程会确认实际版本是否等于 `pendingUpdateVersion`，记录确认结果并清理一次性 pending 状态，从而避免旧进程残留、虚假的“已重启”状态和重启循环。真实版本 A → B 更新、NSIS 自动启动、进程退出、单实例、开机启动和卸载仍需在隔离 Windows 环境中验证。
+正常 Windows 路径是终止式安装交接：Tauri Updater 启动被动 NSIS，`on_before_exit` 刷新日志并执行应用退出清理，旧进程随后退出；NSIS 替换文件后自动启动新程序。只有安装命令在该路径之外返回时，受控 Process relaunch 才作为后备；若该兜底失败，重试只重新发起 relaunch，绝不再次安装。新进程会确认实际版本是否等于 `pendingUpdateVersion`：只有版本确认成功才清除 pending；确认失败会保留目标版本和失败证据，并且同一个失败目标只向用户提示一次，从而避免丢失失败线索、虚假的“已重启”状态和重启循环。真实版本 A → B 更新、NSIS 自动启动、进程退出、单实例、开机启动和卸载仍需在隔离 Windows 环境中验证。
 
 ## 网络与隐私
 
