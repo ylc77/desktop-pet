@@ -1,6 +1,6 @@
 [package]
 name = "desk-pet-framework"
-version = "0.1.0"
+version = "0.1.1-beta.1"
 description = "A reusable offline Windows desktop pet framework"
 authors = ["七酱桌宠 Contributors"]
 edition = "2021"

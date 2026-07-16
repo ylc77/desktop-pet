@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "desk-pet-framework"
-version = "0.1.0"
+version = "0.1.1-beta.1"
 dependencies = [
  "log",
  "png 0.18.1",
