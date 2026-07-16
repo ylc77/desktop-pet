@@ -524,6 +524,17 @@ function Get-QAOperatingSystemFacts {
     }
 }
 
+function Get-QAExecutableSearchPath {
+    param(
+        [AllowNull()][string]$ProcessPath = [Environment]::GetEnvironmentVariable('Path', 'Process'),
+        [AllowNull()][string]$UserPath = [Environment]::GetEnvironmentVariable('Path', 'User'),
+        [AllowNull()][string]$MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    )
+
+    return (@($ProcessPath, $UserPath, $MachinePath) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [System.IO.Path]::PathSeparator
+}
+
 function Get-ObjectPropertyValue {
     param(
         [Parameter(Mandatory)][AllowNull()][object]$InputObject,

@@ -52,6 +52,10 @@ try {
     Test-ArchitectureCase 'QA environment capture uses the resilient OS helper' $true {
         $runQaText -match 'os=Get-QAOperatingSystemFacts' -and $runQaText -notmatch 'Get-CimInstance\s+Win32_OperatingSystem'
     }
+
+    $combinedPath = Get-QAExecutableSearchPath -ProcessPath 'C:\session-tools' -UserPath 'C:\user-tools' -MachinePath 'C:\machine-tools'
+    Test-ArchitectureCase 'QA executable path preserves process-scoped tools' 'C:\session-tools;C:\user-tools;C:\machine-tools' { $combinedPath }
+    Test-ArchitectureCase 'QA dispatcher uses the combined executable path' $true { $runQaText -match '\$env:Path\s*=\s*Get-QAExecutableSearchPath' }
 } finally {
     $env:PROCESSOR_ARCHITEW6432 = $savedW6432
     $env:PROCESSOR_ARCHITECTURE = $savedArchitecture

@@ -26,7 +26,7 @@ Test-Command rustup @('show', 'active-toolchain')
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $cargoBin = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.cargo\bin'
 $cargoOnUserPath = @($userPath -split ';' | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') }) -contains $cargoBin.TrimEnd('\')
-Add-Result 'User PATH contains Cargo' $cargoOnUserPath $(if ($cargoOnUserPath) { '%USERPROFILE%\.cargo\bin is present.' } else { 'Add %USERPROFILE%\.cargo\bin to the user PATH, then open a new terminal.' })
+Add-Result 'User PATH contains Cargo' $cargoOnUserPath $(if ($cargoOnUserPath) { '%USERPROFILE%\.cargo\bin is present.' } else { 'Cargo is available to this process, but add %USERPROFILE%\.cargo\bin to the user PATH for future terminals.' }) $false
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $msvcPath = $null

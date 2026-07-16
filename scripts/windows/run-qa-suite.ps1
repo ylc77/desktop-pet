@@ -65,7 +65,7 @@ if (-not [System.IO.File]::Exists($commandLog)) {
     try { Set-Content -Encoding UTF8 -LiteralPath $commandLog -Value '' } finally { $WhatIfPreference = $savedWhatIfForOutput }
 }
 $results = @()
-$env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')
+$env:Path = Get-QAExecutableSearchPath
 
 function Add-Result([string]$Name, [string]$Category, [string]$Status, [string]$Command, [string]$Details) {
     $script:results += [pscustomobject]@{ name=$Name; category=$Category; status=$Status; command=$Command; details=$Details }
