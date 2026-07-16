@@ -30,12 +30,21 @@ try {
     $configurationPath = [System.IO.Path]::Combine($repositoryRoot, 'config', 'updater.github-releases.json')
     $configurationText = Get-Content -LiteralPath $configurationPath -Raw -Encoding UTF8
     $configuration = Read-GitHubUpdaterHostingConfiguration -LiteralPath $configurationPath
-    Test-Equal 'Formal GitHub hosting configuration is disabled' $false ([bool]$configuration.enabled)
+    Test-Equal 'Formal GitHub hosting configuration is enabled' $true ([bool]$configuration.enabled)
     Test-Equal 'Configured GitHub repository is exact' 'ylc77/desktop-pet' ([string]$configuration.repository)
-    Test-Equal 'Proposed beta metadata uses the exact reviewed GitHub Pages path' 'https://ylc77.github.io/desktop-pet/updater/beta/latest.json' ([string]$configuration.metadata.endpoint)
-    Test-Equal 'GitHub Pages proposal is not owner-confirmed' $false ([bool]$configuration.metadata.ownerConfirmed)
+    Test-Equal 'Beta metadata uses the exact reviewed GitHub Releases latest asset path' 'https://github.com/ylc77/desktop-pet/releases/latest/download/latest.json' ([string]$configuration.metadata.endpoint)
+    Test-Equal 'GitHub Releases metadata is owner-confirmed' $true ([bool]$configuration.metadata.ownerConfirmed)
     Test-Equal 'Hosting configuration has no key or credential fields' $false ([bool]($configurationText -match '(?i)"(?:privateKey|publicKey|password|accessToken|apiToken|secret)"\s*:'))
-    Test-Equal 'Hosting configuration does not use releases/latest' $false ([bool]($configurationText -match '(?i)/releases/latest(?:/|$)'))
+    Test-Equal 'Hosting configuration uses the stable releases/latest asset route' $true ([bool]($configurationText -match '(?i)/releases/latest/download/latest\.json'))
+    $updaterOverlay = Get-Content -LiteralPath ([System.IO.Path]::Combine($repositoryRoot, 'src-tauri', 'tauri.updater.conf.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
+    Test-Equal 'Tracked updater overlay enables Tauri updater artifacts' $true ([bool]$updaterOverlay.bundle.createUpdaterArtifacts)
+    Test-Equal 'Tracked updater overlay uses the production endpoint' ([string]$configuration.metadata.endpoint) ([string]$updaterOverlay.plugins.updater.endpoints[0])
+    Test-Equal 'Tracked updater overlay embeds the production public-key fingerprint' '843139244142865CA6E45A0F6D77A2128D3CC0486792BD5388BBC7B753B35552' `
+        (Get-UpdaterPublicKeyTextFingerprint -PublicKeyText ([string]$updaterOverlay.plugins.updater.pubkey))
+    $baseTauriConfiguration = Get-Content -LiteralPath ([System.IO.Path]::Combine($repositoryRoot, 'src-tauri', 'tauri.conf.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
+    $placeholderManifest = Get-Content -LiteralPath ([System.IO.Path]::Combine($repositoryRoot, 'public', 'characters', '_placeholder', 'manifest.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
+    Test-Equal 'Updater enablement preserves the application identifier' 'dev.deskpet.framework' ([string]$baseTauriConfiguration.identifier)
+    Test-Equal 'Updater enablement preserves character schemaVersion 1' 1 ([int]$placeholderManifest.schemaVersion)
 
     $booleanCases = @(
         @{ Name='enabled'; Apply={ param($value); $value.enabled = 'false' } },
@@ -55,6 +64,13 @@ try {
         }.GetNewClosure()
         Test-Throws ("String false is rejected for JSON Boolean " + [string]$booleanCase.Name) $invalidBooleanAction 'JSON Boolean'
     }
+    $prereleaseConfiguration = $configurationText | ConvertFrom-Json
+    $prereleaseConfiguration.release.prerelease = $true
+    $prereleaseConfigurationPath = [System.IO.Path]::Combine($temporaryRoot, 'invalid-prerelease-routing.json')
+    [System.IO.File]::WriteAllText($prereleaseConfigurationPath, ($prereleaseConfiguration | ConvertTo-Json -Depth 8), $utf8NoBom)
+    Test-Throws 'releases/latest beta routing rejects the GitHub prerelease flag' {
+        Read-GitHubUpdaterHostingConfiguration -LiteralPath $prereleaseConfigurationPath
+    } 'prerelease flag|releases/latest'
     $stringSchemaConfiguration = $configurationText | ConvertFrom-Json
     $stringSchemaConfiguration.schemaVersion = '1'
     $stringSchemaPath = [System.IO.Path]::Combine($temporaryRoot, 'string-schema.json')
@@ -116,7 +132,7 @@ try {
     Test-Equal 'Release asset URL binds to a versioned tag' $true ([bool]($downloadUri.AbsolutePath -match '/releases/download/v0\.2\.1-beta\.1/'))
     Test-Equal 'Unicode Release asset URL round-trips exact filename' $artifactName ([Uri]::UnescapeDataString([System.IO.Path]::GetFileName($downloadUri.AbsolutePath)))
     Test-Equal 'Release tag preserves complete prerelease SemVer' "v$version" (Get-GitHubUpdaterReleaseTag -Configuration $enabledConfiguration -Version $version)
-    Test-Equal 'Versioned metadata snapshot preserves complete SemVer' "https://ylc77.github.io/desktop-pet/updater/beta/$version/latest.json" (Get-GitHubUpdaterVersionedMetadataUrl -Configuration $enabledConfiguration -Version $version)
+    Test-Equal 'Versioned metadata snapshot preserves complete SemVer' "https://github.com/ylc77/desktop-pet/releases/download/v$version/latest.json" (Get-GitHubUpdaterVersionedMetadataUrl -Configuration $enabledConfiguration -Version $version)
 
     $latest = New-UpdaterLatestDocument -Version $version -CurrentVersion $currentVersion -DownloadUrl $downloadUrl `
         -Signature $signatureText -Platform 'windows-x86_64' -PublishedAtUtc '2026-07-16T00:00:00Z' `
@@ -420,7 +436,10 @@ try {
     }.GetNewClosure()
     $stableReleaseState = Get-GitHubUpdaterRepositoryState -Repository 'ylc77/desktop-pet' -HeadCommit $commit -Tag "v$version" `
         -AssetNames $plannedAssetNames -ReleaseExpectation Draft -GitHubCliPath 'fixture-gh.exe' -CommandInvoker $stableReleaseInvoker
-    Test-Equal 'A non-prerelease release cannot satisfy beta verification' $false ([bool]$stableReleaseState.TargetReleaseStateSatisfied)
+    Test-Equal 'A non-prerelease release is rejected when prerelease is expected' $false ([bool]$stableReleaseState.TargetReleaseStateSatisfied)
+    $latestBetaReleaseState = Get-GitHubUpdaterRepositoryState -Repository 'ylc77/desktop-pet' -HeadCommit $commit -Tag "v$version" `
+        -AssetNames $plannedAssetNames -ReleaseExpectation Draft -ExpectedPrerelease $false -GitHubCliPath 'fixture-gh.exe' -CommandInvoker $stableReleaseInvoker
+    Test-Equal 'A draft non-prerelease release satisfies the releases/latest beta contract' $true ([bool]$latestBetaReleaseState.TargetReleaseStateSatisfied)
 
     $extraAssetInvoker = {
         param([string]$FilePath, [string[]]$ArgumentList)
@@ -453,9 +472,9 @@ try {
         -SignatureVerifier $signatureVerifier
     Test-Equal 'Complete local GitHub release preflight opens its gate' $true ([bool]$plan.GateSatisfied)
     Test-Equal 'Release plan is draft-first' $true ([bool]$plan.Release.Draft)
-    Test-Equal 'Release plan marks the release as prerelease' $true ([bool]$plan.Release.Prerelease)
+    Test-Equal 'Release plan leaves GitHub prerelease false for releases/latest routing' $false ([bool]$plan.Release.Prerelease)
     Test-Equal 'Release plan never performs a remote mutation' $false ([bool]$plan.RemoteMutationPerformed)
-    Test-Equal 'Metadata plan publishes stable latest last' $true ([bool]($plan.Metadata.PublishOrder -match 'last'))
+    Test-Equal 'Metadata plan publishes only after remote verification' $true ([bool]($plan.Metadata.PublishOrder -match 'verify|verified'))
     Test-Equal 'Remote plan requires anonymous verification after publish' $true ([bool]$plan.RemoteVerification.RequireAnonymousDownloadAfterPublish)
     $bundle = Assert-GitHubUpdaterReleaseBundle -Configuration $enabledConfiguration -Version $version -CurrentVersion $currentVersion `
         -ArtifactPath $artifactPath -SignaturePath $signaturePath -PublicKeyPath $publicKeyPath -LatestJsonPath $latestJsonPath `
@@ -601,7 +620,9 @@ try {
     Test-Equal 'Checksum mismatch keeps the release preflight gate closed' $false ([bool]$checksumMismatchPlan.GateSatisfied)
     [System.IO.File]::WriteAllText($checksumPath, $validChecksumText, $utf8NoBom)
 
-    $disabledPlan = New-GitHubUpdaterReleasePlan -Configuration $configuration -Version $version -CurrentVersion $currentVersion `
+    $disabledConfiguration = $configurationText | ConvertFrom-Json
+    $disabledConfiguration.enabled = $false
+    $disabledPlan = New-GitHubUpdaterReleasePlan -Configuration $disabledConfiguration -Version $version -CurrentVersion $currentVersion `
         -ArtifactPath $artifactPath -SignaturePath $signaturePath -PublicKeyPath $publicKeyPath `
         -LatestJsonPath $latestJsonPath -ManifestPath $manifestPath -ChecksumPath $checksumPath -GitState $gitState -GitHubState $githubState `
         -SignatureVerifier $signatureVerifier
@@ -626,18 +647,18 @@ try {
     $badConfigurationObject = $configurationText | ConvertFrom-Json
     $badConfigurationObject.metadata.endpoint = 'https://github.com/ylc77/desktop-pet/releases/latest'
     [System.IO.File]::WriteAllText($badConfigurationPath, ($badConfigurationObject | ConvertTo-Json -Depth 8), $utf8NoBom)
-    Test-Throws 'Prerelease hosting rejects releases/latest metadata' {
+    Test-Throws 'Hosting rejects a releases/latest URL that is not the latest.json asset' {
         Read-GitHubUpdaterHostingConfiguration -LiteralPath $badConfigurationPath
-    } 'releases/latest|GitHub Pages'
+    } 'exactly match|GitHub Releases'
     $evilEndpointConfiguration = $configurationText | ConvertFrom-Json
     $evilEndpointConfiguration.metadata.endpoint = 'https://evil.com/desktop-pet/updater/beta/latest.json'
     $evilEndpointPath = [System.IO.Path]::Combine($temporaryRoot, 'evil-endpoint.json')
     [System.IO.File]::WriteAllText($evilEndpointPath, ($evilEndpointConfiguration | ConvertTo-Json -Depth 8), $utf8NoBom)
     Test-Throws 'Metadata endpoint on another host is rejected' {
         Read-GitHubUpdaterHostingConfiguration -LiteralPath $evilEndpointPath
-    } 'exactly match|GitHub Pages'
+    } 'exactly match|GitHub Releases'
     $extraPathConfiguration = $configurationText | ConvertFrom-Json
-    $extraPathConfiguration.metadata.versionedEndpointTemplate = 'https://ylc77.github.io/desktop-pet/updater/beta/extra/{version}/latest.json'
+    $extraPathConfiguration.metadata.versionedEndpointTemplate = 'https://github.com/ylc77/desktop-pet/releases/download/v{version}/extra/latest.json'
     $extraPath = [System.IO.Path]::Combine($temporaryRoot, 'extra-path.json')
     [System.IO.File]::WriteAllText($extraPath, ($extraPathConfiguration | ConvertTo-Json -Depth 8), $utf8NoBom)
     Test-Throws 'Metadata template with an extra subpath is rejected' {

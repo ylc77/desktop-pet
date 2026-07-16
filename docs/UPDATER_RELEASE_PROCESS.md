@@ -1,8 +1,8 @@
 # Updater 发布流程
 
-> 当前决策（2026-07-16）：本轮只完善禁用状态下的应用内更新基础与安全校验，不生成生产密钥、不输入生产密码、不制作加密备份、不配置 Production endpoint，也不创建、修改或上传任何远端 Release。获得新的明确授权前不得启用生产 updater 配置。
+> 当前决策（2026-07-17）：生产密钥、独立备份、公钥和 GitHub Releases beta endpoint 已由项目所有者确认。本阶段只准备并验证 `0.1.1-beta.1` 与 `0.1.2-beta.1` 本地产物；未经再次授权不创建、修改或上传任何远端 Release。
 
-本文描述已集成但尚未投入公开使用的更新发布基础。当前应用版本为 `0.1.0`，二进制托管已选择 `ylc77/desktop-pet` 的 GitHub Releases；GitHub Pages 只是元数据托管建议，仍待所有者明确确认和实现。正式配置保持禁用，Production endpoint 尚未部署，Windows Authenticode 为 `NotSigned`。因此目前只能执行普通构建、脚本预览和不触发安装的测试。
+本文描述已集成但尚未投入公开使用的更新发布基础。托管使用公开仓库 `ylc77/desktop-pet` 的 GitHub Releases，稳定 endpoint 为 `https://github.com/ylc77/desktop-pet/releases/latest/download/latest.json`。Production 公钥已配置，但远端资产与真实升级尚未完成，Windows Authenticode 仍为 `NotSigned`。
 
 ## 两类构建
 
@@ -40,7 +40,7 @@ npm run build:release
 
 ## GitHub Releases 发布编排
 
-GitHub 托管契约见 [Updater 托管](UPDATER_HOSTING.md)。配置草案 `config/updater.github-releases.json` 当前 `enabled: false`、`metadata.ownerConfirmed: false`，不包含公钥正文或任何秘密。前者阻止远端编排，后者明确表示 Pages 元数据方案尚未获所有者确认。
+GitHub 托管契约见 [Updater 托管](UPDATER_HOSTING.md)。`config/updater.github-releases.json` 当前 `enabled: true`、`metadata.ownerConfirmed: true`，不包含私钥、密码或访问凭据。启用配置只开放本地预检，不授权远端写入。
 
 本地版本目录准备完毕后，先运行 `plan-github-release.ps1 -WhatIf`。预检必须同时确认：
 
@@ -50,19 +50,19 @@ GitHub 托管契约见 [Updater 托管](UPDATER_HOSTING.md)。配置草案 `conf
 4. 安装包、`.sig`、`latest.json`、manifest 的文件名、size、SHA-256、URL 和公钥指纹完全一致。
 5. 使用指定仓库外公钥对最终安装包做真实验签。
 6. 目标 tag、draft/published release 和全部同名资产尚不存在；任意只读查询失败都会关闭 Gate。
-7. Release 计划为 draft + prerelease，资产 URL 固定到版本 tag；没有使用 `/releases/latest` 或滚动安装包别名。
+7. Release 计划先建立 draft，GitHub `prerelease=false`，发布时设为 latest；安装包 URL 固定到版本 tag，稳定 endpoint 只用于 `latest.json`。
 
 预检结果中的 `GateSatisfied` 只有全部项目通过、总体配置启用且元数据方案由所有者明确确认后才可能为 true。`-ConfirmPlan` 只把结果提升为 `ValidatedLocalPlan`；脚本没有创建 Release、上传文件、发布 Pages 或推送 Git 的能力。
 
-后续获得单独远端写入授权后，操作顺序必须是：建立版本化 draft prerelease、上传精确资产、运行 `verify-github-release-assets.ps1` 从远端重新下载并复核、发布 prerelease，再用 `-ReleaseExpectation Present -Anonymous` 从未登录路径验证公开资产。若所有者届时另行确认并启用 GitHub Pages，才在一次 Pages 部署中加入版本快照，并以同目录临时文件加原子替换更新稳定 beta 指针。任何验证失败都停止在更新稳定元数据之前。
+后续获得单独远端写入授权后，操作顺序必须是：建立版本化 draft、上传精确资产、运行 `verify-github-release-assets.ps1` 从远端重新下载并复核、以 `prerelease=false` 发布并设为 GitHub latest，再用 `-ReleaseExpectation Present -Anonymous` 验证公开资产。任何验证失败都必须停在发布之前。
 
-GitHub prerelease 不使用 `/releases/latest`。稳定 endpoint 固定为：
+稳定 endpoint 固定为：
 
 ```text
-https://ylc77.github.io/desktop-pet/updater/beta/latest.json
+https://github.com/ylc77/desktop-pet/releases/latest/download/latest.json
 ```
 
-该地址目前只是建议方案，尚未得到所有者明确确认且未部署，不得在正式签名构建中启用。
+该地址已经由所有者确认并嵌入签名构建，但在目标 Release 正式发布并设为 latest 前会返回不可用状态；这不授权提前上传。
 
 ## 生成与验证元数据
 

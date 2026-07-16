@@ -2,7 +2,7 @@
 
 本清单是 `0.1.0` 公开测试版 Gate 的唯一状态总表。状态只能填写 `passed`、`failed`、`blocked` 或 `not_executed`，并必须附带环境结果 JSON 或真实人工记录。自动化、当前机器、Sandbox、Windows 10 VM、Windows 11 VM 和真实硬件结果不得互相替代。
 
-当前结论：**BLOCKED / NOT_READY**。`0.1.0` 已接入安全更新与公开测试最小功能基础，发布工具已经可以隔离构建产物、严格校验 `latest.json`，并在唯一临时 target 中构建验证器，对 artifact、`.sig` 和外部公钥做真实密码学验签；但生产 updater 密钥和 HTTPS endpoint 尚未配置，真实 A → B 尚未执行，Windows Authenticode 仍为 `NotSigned`。不得把工具能力、普通构建或临时签名测试标记为公开自动更新可用，也不创建正式 beta 标签或公开测试版目录。
+当前结论：**BLOCKED / NOT_READY**。生产 updater 密钥、备份、公钥和 GitHub Releases endpoint 已确认，发布工具可以隔离构建产物、严格校验 `latest.json` 并真实验签；但远端资产尚未发布，真实 A → B 尚未执行，Windows Authenticode 仍为 `NotSigned`。不得把本地签名构建标记为公开自动更新可用，也不创建正式 beta 标签或公开测试版目录。
 
 ## A. 必须通过
 
@@ -51,7 +51,7 @@
 - 完全离线 WebView2：当前 `downloadBootstrapper` 不包含离线 Runtime。
 - Microsoft Store、macOS、Linux：当前未实现。
 
-自动更新不属于“可延期且已完成”：基础虽已接入，但生产密钥/endpoint 与端到端验证未完成，是当前公开测试 Gate 的阻塞项。
+自动更新不属于“可延期且已完成”：生产配置虽已确认，但远端与端到端验证未完成，仍是公开测试 Gate 的阻塞项。
 
 ## 证据要求
 

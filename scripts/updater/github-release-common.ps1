@@ -115,32 +115,29 @@ function Read-GitHubUpdaterHostingConfiguration {
     )
     if ($null -eq $release -or [string](Get-GitHubHostingPropertyValue $release 'tagPrefix') -ne 'v' -or
         -not (Get-GitHubHostingRequiredBoolean -InputObject $release -Name 'draft') -or
-        -not (Get-GitHubHostingRequiredBoolean -InputObject $release -Name 'prerelease') -or
+        (Get-GitHubHostingRequiredBoolean -InputObject $release -Name 'prerelease') -or
         -not (Get-GitHubHostingRequiredBoolean -InputObject $release -Name 'immutableVersionedAssets')) {
-        throw 'GitHub updater releases must be immutable, draft-first prereleases using v-prefixed version tags.'
+        throw 'GitHub updater releases must be immutable and draft-first with v-prefixed version tags; the GitHub prerelease flag must remain false so releases/latest can select the beta release.'
     }
 
     $metadata = Get-GitHubHostingPropertyValue $configuration 'metadata'
     Assert-GitHubHostingExactObjectProperties -InputObject $metadata -SchemaName 'GitHub updater metadata configuration' -AllowedProperties @(
         'provider','ownerConfirmed','endpoint','versionedEndpointTemplate','publishAfterRemoteVerification'
     )
-    if ($null -eq $metadata -or [string](Get-GitHubHostingPropertyValue $metadata 'provider') -ne 'github-pages' -or
+    if ($null -eq $metadata -or [string](Get-GitHubHostingPropertyValue $metadata 'provider') -ne 'github-releases' -or
         -not (Get-GitHubHostingRequiredBoolean -InputObject $metadata -Name 'publishAfterRemoteVerification')) {
-        throw 'GitHub updater metadata must use GitHub Pages and publish only after remote verification.'
+        throw 'GitHub updater metadata must use GitHub Releases and publish only after remote verification.'
     }
     [void](Get-GitHubHostingRequiredBoolean -InputObject $metadata -Name 'ownerConfirmed')
     $endpoint = Assert-UpdaterHttpsUrl -Url ([string](Get-GitHubHostingPropertyValue $metadata 'endpoint'))
     $versionedTemplate = [string](Get-GitHubHostingPropertyValue $metadata 'versionedEndpointTemplate')
     if ($versionedTemplate -notmatch '\{version\}') { throw 'Versioned metadata endpoint template must contain {version}.' }
     $templateProbe = Assert-UpdaterHttpsUrl -Url ($versionedTemplate.Replace('{version}', '0.0.0-test.1'))
-    if ($endpoint -match '(?i)/releases/latest(?:/|$)' -or $templateProbe -match '(?i)/releases/latest(?:/|$)') {
-        throw 'Prerelease updater metadata must never use the GitHub releases/latest route.'
-    }
-    $expectedEndpoint = 'https://ylc77.github.io/desktop-pet/updater/beta/latest.json'
-    $expectedVersionedTemplate = 'https://ylc77.github.io/desktop-pet/updater/beta/{version}/latest.json'
+    $expectedEndpoint = 'https://github.com/ylc77/desktop-pet/releases/latest/download/latest.json'
+    $expectedVersionedTemplate = 'https://github.com/ylc77/desktop-pet/releases/download/v{version}/latest.json'
     if (-not [string]::Equals($endpoint, $expectedEndpoint, [StringComparison]::Ordinal) -or
         -not [string]::Equals($versionedTemplate, $expectedVersionedTemplate, [StringComparison]::Ordinal)) {
-        throw 'GitHub Pages metadata endpoint and versioned template must exactly match the reviewed beta paths.'
+        throw 'GitHub Releases metadata endpoint and versioned template must exactly match the reviewed beta paths.'
     }
 
     return $configuration
@@ -389,6 +386,7 @@ function Get-GitHubUpdaterRepositoryState {
         [Parameter(Mandatory)][string]$Tag,
         [Parameter(Mandatory)][string[]]$AssetNames,
         [ValidateSet('Absent','Draft','Present')][string]$ReleaseExpectation = 'Absent',
+        [bool]$ExpectedPrerelease = $true,
         [scriptblock]$CommandInvoker,
         [string]$GitHubCliPath
     )
@@ -492,7 +490,7 @@ function Get-GitHubUpdaterRepositoryState {
                 $releaseDraft = Get-GitHubHostingRequiredBoolean -InputObject $targetRelease -Name 'draft'
                 $releasePrerelease = Get-GitHubHostingRequiredBoolean -InputObject $targetRelease -Name 'prerelease'
                 $releaseDraftMatches = $releaseDraft -eq ($ReleaseExpectation -eq 'Draft')
-                $releasePrereleaseMatches = $releasePrerelease
+                $releasePrereleaseMatches = $releasePrerelease -eq $ExpectedPrerelease
             } catch {
                 $releaseDraftMatches = $false
                 $releasePrereleaseMatches = $false
@@ -727,7 +725,7 @@ function New-GitHubUpdaterReleasePlan {
     }
     $checks = @(
         [pscustomobject]@{ Name='Hosting configuration enabled'; Passed=(Get-GitHubHostingRequiredBoolean -InputObject $Configuration -Name 'enabled'); Details='Owner-controlled switch must be enabled only after prerequisites are complete.' },
-        [pscustomobject]@{ Name='Metadata hosting owner confirmation'; Passed=(Get-GitHubHostingRequiredBoolean -InputObject (Get-GitHubHostingPropertyValue $Configuration 'metadata') -Name 'ownerConfirmed'); Details='GitHub Pages remains a proposal until explicitly confirmed.' },
+        [pscustomobject]@{ Name='Metadata hosting owner confirmation'; Passed=(Get-GitHubHostingRequiredBoolean -InputObject (Get-GitHubHostingPropertyValue $Configuration 'metadata') -Name 'ownerConfirmed'); Details='GitHub Releases metadata endpoint is owner-confirmed.' },
         [pscustomobject]@{ Name='GitHub CLI available'; Passed=[bool](Get-GitHubHostingPropertyValue $GitHubState 'CliAvailable'); Details='Read-only gh checks only.' },
         [pscustomobject]@{ Name='GitHub authentication'; Passed=[bool](Get-GitHubHostingPropertyValue $GitHubState 'Authenticated'); Details='github.com authentication required.' },
         [pscustomobject]@{ Name='GitHub query completeness'; Passed=[bool](Get-GitHubHostingPropertyValue $GitHubState 'QueriesSucceeded'); Details='Every read-only identity, commit, tag, release, and asset query must succeed.' },
@@ -770,15 +768,15 @@ function New-GitHubUpdaterReleasePlan {
         Version = $Version
         Tag = $tag
         Release = [pscustomobject]@{
-            Draft = $true
-            Prerelease = $true
+            Draft = Get-GitHubHostingRequiredBoolean -InputObject (Get-GitHubHostingPropertyValue $Configuration 'release') -Name 'draft'
+            Prerelease = Get-GitHubHostingRequiredBoolean -InputObject (Get-GitHubHostingPropertyValue $Configuration 'release') -Name 'prerelease'
             Assets = @($artifactName,$signatureName,[System.IO.Path]::GetFileName($LatestJsonPath),[System.IO.Path]::GetFileName($ManifestPath),[System.IO.Path]::GetFileName($ChecksumPath))
             ImmutableArtifactUrl = $downloadUrl
         }
         Metadata = [pscustomobject]@{
             StableEndpoint = $endpoint
             VersionedEndpoint = $versionedMetadataUrl
-            PublishOrder = 'Publish the versioned snapshot first and the stable beta latest.json last, after remote artifact verification.'
+            PublishOrder = 'Create the versioned draft, upload and verify every asset, then publish it as the non-prerelease GitHub latest release so the stable latest.json endpoint advances.'
         }
         RemoteVerification = [pscustomobject]@{
             AuthenticatedDraftDownload = 'Use verify-github-release-assets.ps1 after the draft assets exist.'
@@ -788,6 +786,6 @@ function New-GitHubUpdaterReleasePlan {
             RequireAnonymousDownloadAfterPublish = $true
         }
         Checks = @($checks)
-        ProhibitedRoutes = @('/releases/latest','rolling release asset aliases')
+        ProhibitedRoutes = @('public installer aliases in updater metadata','unversioned installer asset URLs')
     }
 }

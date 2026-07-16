@@ -1,6 +1,6 @@
 # Updater QA
 
-当前 updater 基础为 `INTEGRATED / NOT_CONFIGURED`。本清单用于自动化、临时测试签名和后续真实版本 A → B 验证；前两者不能替代真实端到端升级。
+当前 updater 基础为 `PRODUCTION_CONFIGURED / LOCAL_RELEASE_PENDING`。本清单用于生产签名资产验证和后续真实版本 A → B 验证；本地构建通过不能替代真实端到端升级。
 
 两种升级证据必须严格区分：
 

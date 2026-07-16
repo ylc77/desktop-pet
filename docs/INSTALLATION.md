@@ -1,6 +1,6 @@
 # 安装说明
 
-当前版本化内部安装包为 `七酱桌宠_0.1.0_x64-setup.exe`，对外文件名为 `七酱桌宠.exe`。公开测试 Gate 尚未通过；生产 updater 公钥与 HTTPS endpoint 未配置，不能把当前包视为已经支持公开自动更新。
+当前公开测试 Gate 尚未通过。生产 updater 公钥与 HTTPS endpoint 已配置，但候选 Release 尚未上传、真实 A → B 尚未执行，因此现有安装包仍不能视为已经完成公开自动更新验收。
 
 1. 确认系统为 Windows 10/11 x64，并准备联网环境以便缺失时下载 WebView2。
 2. 从可信渠道取得安装包和 `SHA256SUMS.txt`。
@@ -17,4 +17,4 @@ Get-AuthenticodeSignature '.\七酱桌宠.exe'
 
 当前 NSIS 使用 `currentUser` 和默认 LocalAppData 安装策略。尚未通过真实 QA 证明图形界面支持自定义 Program Files、中文或长安装路径；纯路径函数测试不能替代真实 NSIS 安装测试。
 
-当前普通构建不会检查或下载更新。以后启用正式服务时，自动检查可以由用户关闭，且更新不会静默下载或安装；网络与签名说明见 [AUTO_UPDATE.md](AUTO_UPDATE.md)。
+生产签名构建默认自动检查更新，用户可关闭；更新不会静默下载或安装，必须点击“立即更新”。普通非 updater 构建仍保持不联网。网络与签名说明见 [AUTO_UPDATE.md](AUTO_UPDATE.md)。

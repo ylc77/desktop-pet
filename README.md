@@ -1,6 +1,6 @@
 # 七酱桌宠
 
-七酱桌宠是一个离线优先、资源包驱动的 Windows 桌宠应用，底层保留可扩展的通用桌宠框架。技术栈为 Tauri 2、React、TypeScript、Rust 和 Vite。当前版本不包含 AI、账号、支付、提醒、云同步、遥测或广告；已经接入公开测试所需的安全更新基础，但生产 updater 公钥和 HTTPS endpoint 尚未配置。
+七酱桌宠是一个离线优先、资源包驱动的 Windows 桌宠应用，底层保留可扩展的通用桌宠框架。技术栈为 Tauri 2、React、TypeScript、Rust 和 Vite。当前版本不包含 AI、账号、支付、提醒、云同步、遥测或广告；生产 updater 公钥与 GitHub Releases beta endpoint 已确认，签名候选与真实 A → B 验证仍在发布 Gate 内。
 
 ## 已实现
 

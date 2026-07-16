@@ -1,6 +1,6 @@
 # 自动更新说明
 
-七酱桌宠 `0.1.0` 已接入 Tauri 2 Updater 与 Process 插件的安全更新基础，但当前生产 updater 公钥和 HTTPS endpoint **尚未配置**。因此当前状态是 `INTEGRATED / NOT_CONFIGURED`，不是“自动更新已公开可用”，公开测试版 Gate 仍为 `BLOCKED`。
+七酱桌宠已接入 Tauri 2 Updater 与 Process 插件，生产公钥和 GitHub Releases HTTPS endpoint 已配置。当前状态是 `PRODUCTION_CONFIGURED / LOCAL_RELEASE_PENDING`；远端资产与真实 A → B 尚未验证，因此公开测试版 Gate 仍为 `BLOCKED`。
 
 ## 当前行为
 

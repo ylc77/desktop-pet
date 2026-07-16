@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "enabled": false,
+  "enabled": true,
   "provider": "github-releases",
   "repository": "ylc77/desktop-pet",
   "identifier": "dev.deskpet.framework",
@@ -10,15 +10,15 @@
   "release": {
     "tagPrefix": "v",
     "draft": true,
-    "prerelease": true,
+    "prerelease": false,
     "immutableVersionedAssets": true
   },
   "metadata": {
-    "provider": "github-pages",
-    "ownerConfirmed": false,
-    "endpoint": "https://ylc77.github.io/desktop-pet/updater/beta/latest.json",
-    "versionedEndpointTemplate": "https://ylc77.github.io/desktop-pet/updater/beta/{version}/latest.json",
+    "provider": "github-releases",
+    "ownerConfirmed": true,
+    "endpoint": "https://github.com/ylc77/desktop-pet/releases/latest/download/latest.json",
+    "versionedEndpointTemplate": "https://github.com/ylc77/desktop-pet/releases/download/v{version}/latest.json",
     "publishAfterRemoteVerification": true
   },
-  "status": "Disabled for this phase: no production signing key, encrypted backup, signed updater asset, or metadata deployment will be created. GitHub Releases binary hosting is confirmed; GitHub Pages metadata remains an unconfirmed proposal."
+  "status": "Production updater configuration approved for the beta channel. Versioned assets remain immutable; the published beta release must be explicitly set as GitHub latest and must not use the GitHub prerelease flag. Remote upload remains separately authorized."
 }

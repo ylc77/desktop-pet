@@ -4,7 +4,7 @@
 
 - 不包含遥测、广告、账号、支付、云数据库或在线同步。
 - 不上传设置、日志、角色资源、诊断包、崩溃报告或设备信息。
-- 当前生产 updater endpoint 未配置，普通构建不会进行更新网络请求。以后配置正式 HTTPS 更新源后，只有启用启动自动检查或用户主动手动检查时才访问该服务；用户可以关闭自动检查。
+- 生产签名构建使用 GitHub Releases HTTPS endpoint；启用启动自动检查或用户主动检查时才访问 GitHub，用户可以关闭自动检查。普通非 updater 构建不会进行更新网络请求。
 - 更新检查只获取签名的版本元数据和更新包，不附带账号、设置、日志、角色资源或诊断内容。托管服务仍可能按普通 HTTPS 请求处理 IP 地址等连接信息；采用正式服务前会在本文补充其运营方与隐私链接。
 - 当目标电脑缺少 Microsoft Edge WebView2 Runtime 时，NSIS 的 `downloadBootstrapper` 会访问 Microsoft 的下载服务。
 - 设置保存在 `%APPDATA%\dev.deskpet.framework\`。

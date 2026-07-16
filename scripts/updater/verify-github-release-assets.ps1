@@ -54,7 +54,8 @@ $repositoryState = $null
 $gh = $null
 if (-not $Anonymous) {
     $repositoryState = Get-GitHubUpdaterRepositoryState -Repository $repository -HeadCommit $localBundle.ManifestCommit `
-        -Tag $tag -AssetNames $plannedAssetNames -ReleaseExpectation $ReleaseExpectation
+        -Tag $tag -AssetNames $plannedAssetNames -ReleaseExpectation $ReleaseExpectation `
+        -ExpectedPrerelease (Get-GitHubHostingRequiredBoolean -InputObject (Get-GitHubHostingPropertyValue $configuration 'release') -Name 'prerelease')
     if (-not $repositoryState.Authenticated -or -not $repositoryState.QueriesSucceeded -or
         -not $repositoryState.RepositoryMatches -or -not $repositoryState.PublicRepository -or
         -not $repositoryState.PermissionSufficient -or -not $repositoryState.HeadCommitExists -or

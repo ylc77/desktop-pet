@@ -20,7 +20,7 @@ Rust 测试 profile 不生成调试符号并关闭增量编译，以降低 Windo
 
 ## Updater 构建边界
 
-普通 `npm run build:release` 不需要生产密钥或 endpoint，主配置保持 `bundle.createUpdaterArtifacts: false`。当前 `0.1.0` 的安全更新基础已经接入，但生产公钥和 HTTPS endpoint 未配置；应用显示 `NOT_CONFIGURED`，启动时不访问更新服务。
+普通 `npm run build:release` 不需要生产密钥，主配置保持 `bundle.createUpdaterArtifacts: false`。生产公钥和 GitHub Releases endpoint 记录在 updater overlay 中；只有签名构建才同时把该配置固化到 Tauri 插件和 Rust 运行时。
 
 `src-tauri/tauri.updater.conf.json` 固定记录签名构建必须使用 `createUpdaterArtifacts: true` 的公开契约。实际签名工具在 `%TEMP%` 生成一次性配置叠加，写入经过验证的 HTTPS endpoint、公钥和 Windows `passive` 安装模式；构建使用隔离 `CARGO_TARGET_DIR`，只接受本次生成且精确匹配产品、版本和架构的安装包，复制后再验签。完成后删除临时配置和 target，不把正式 endpoint 或公钥伪造进普通配置。达到生成生产密钥、设置 endpoint、真实签名或上传步骤时必须先获得用户确认。
 
@@ -69,7 +69,7 @@ Safe 模式只执行非破坏性构建、测试、哈希、签名状态、清单
 
 环境结果独立保存在 `qa-results/public-beta/<environment-id>/environment-result.json`。审核脚本读取每个检查的实际状态和证据，不会因为文件存在就自动判定通过。只有 Gate 真正满足后才可准备 `release/public-beta`；当前不得仅改文件名或提前创建 `beta.1` 标签。
 
-当前自动更新状态是 `INTEGRATED / NOT_CONFIGURED`。生产 updater 公钥或 endpoint 缺失、Updater 产物/元数据未生成，或两个真实版本升级未完成时，Public Beta Gate 必须报告 `BLOCKED`，不能因为普通构建通过而标记为 passed。
+当前自动更新状态是 `PRODUCTION_CONFIGURED / LOCAL_RELEASE_PENDING`。Updater 产物/元数据尚未完成远端验证，且真实两版本升级未完成，因此 Public Beta Gate 仍必须报告 `BLOCKED`。
 
 生产 updater Release 的验证必须显式提供仓库外公钥，并要求真实密码学验签。签名工具只读取一次外部公钥并使用唯一 snapshot，同时在发布前复核私钥哈希和完整 Git 状态；发布准备的 size、signature、哈希与 `latest.json` 全部来自 staging 副本：
 
