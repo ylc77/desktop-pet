@@ -11,10 +11,22 @@ export interface AnimationDefinition {
   weight?: number;
   minDelayMs?: number;
   maxDelayMs?: number;
+  minDurationMs?: number;
+  maxDurationMs?: number;
+  anticipation?: AnimationState;
+  recovery?: AnimationState;
   offsetX?: number;
   offsetY?: number;
   scale?: number;
   flipXAllowed?: boolean;
+  movement?: {
+    speed: number;
+    acceleration?: number;
+    deceleration?: number;
+    edgePadding?: number;
+    direction?: "left" | "right";
+    reverseTo?: AnimationState;
+  };
 }
 
 export interface CharacterManifest {
@@ -28,6 +40,16 @@ export interface CharacterManifest {
   frameSize: { width: number; height: number };
   anchor: { x: number; y: number };
   hitbox?: { x: number; y: number; width: number; height: number };
+  visual?: {
+    dropShadow?: boolean;
+    groundShadow?: {
+      enabled: boolean;
+      width?: number;
+      height?: number;
+      opacity?: number;
+      blur?: number;
+    };
+  };
   preview?: string;
   icon?: string;
   animations: Partial<Record<AnimationState, AnimationDefinition>> & { idle: AnimationDefinition };

@@ -49,9 +49,9 @@ try {
 
     $csv = [System.IO.Path]::Combine($root, 'performance.csv')
     @(
-        [pscustomobject]@{TimestampUtc='2026-01-01T00:00:00Z';PID=1;CPUPercent=1;WorkingSetBytes=100;PrivateMemoryBytes=80;Handles=10;Threads=2},
-        [pscustomobject]@{TimestampUtc='2026-01-01T04:00:00Z';PID=1;CPUPercent=2;WorkingSetBytes=110;PrivateMemoryBytes=85;Handles=11;Threads=2},
-        [pscustomobject]@{TimestampUtc='2026-01-01T08:00:00Z';PID=1;CPUPercent=1;WorkingSetBytes=105;PrivateMemoryBytes=84;Handles=10;Threads=2}
+        [pscustomobject]@{RecordType='Aggregate';RunId='synthetic-eight-hour';SampleIndex=0;TimestampUtc='2026-01-01T00:00:00Z';ElapsedSeconds=0;IntervalSeconds=14400;RootProcessCount=1;WebView2ProcessCount=4;ProcessCount=5;CPUPercent='';WorkingSetBytes=100;PrivateMemoryBytes=80;Handles=10;Threads=2},
+        [pscustomobject]@{RecordType='Aggregate';RunId='synthetic-eight-hour';SampleIndex=1;TimestampUtc='2026-01-01T04:00:00Z';ElapsedSeconds=14400;IntervalSeconds=14400;RootProcessCount=1;WebView2ProcessCount=4;ProcessCount=5;CPUPercent=2;WorkingSetBytes=110;PrivateMemoryBytes=85;Handles=11;Threads=2},
+        [pscustomobject]@{RecordType='Aggregate';RunId='synthetic-eight-hour';SampleIndex=2;TimestampUtc='2026-01-01T08:00:00Z';ElapsedSeconds=28800;IntervalSeconds=14400;RootProcessCount=1;WebView2ProcessCount=4;ProcessCount=5;CPUPercent=1;WorkingSetBytes=105;PrivateMemoryBytes=84;Handles=10;Threads=2}
     ) | Export-Csv -LiteralPath $csv -NoTypeInformation -Encoding UTF8
     $analysisPath = [System.IO.Path]::Combine($root, 'performance-analysis.json')
     & ([System.IO.Path]::Combine($windowsRoot, 'analyze-performance.ps1')) -InputPath $csv -OutputPath ([System.IO.Path]::Combine($root, 'performance-summary.md')) -JsonOutputPath $analysisPath | Out-Null

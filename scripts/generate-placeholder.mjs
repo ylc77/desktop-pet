@@ -42,7 +42,4 @@ for (const [state, frames] of Object.entries(states)) {
 
 await sharp(Buffer.from(svg(states.idle[0]))).png().toFile(path.join(root, "preview.png"));
 await sharp(Buffer.from(svg(states.idle[0]))).resize(128, 128).png().toFile(path.join(root, "icon.png"));
-await mkdir(path.resolve("src-tauri/icons"), { recursive: true });
-await sharp(Buffer.from(svg(states.idle[0]))).resize(512, 512).png().toFile(path.resolve("src-tauri/icons/icon.png"));
 console.log("Generated neutral geometric placeholder PNG frames.");
-

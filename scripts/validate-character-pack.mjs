@@ -40,6 +40,24 @@ for (const entry of characterEntries) {
     const box = manifest.hitbox;
     if (![box.x, box.y, box.width, box.height].every(Number.isFinite) || box.x < 0 || box.y < 0 || box.width <= 0 || box.height <= 0 || box.x + box.width > 1 || box.y + box.height > 1) errors.push(`${entry.name}: hitbox 必须是画布内的归一化矩形`);
   }
+  if (manifest.visual !== undefined) {
+    const visual = manifest.visual;
+    if (!visual || typeof visual !== "object" || Array.isArray(visual)) errors.push(`${entry.name}: visual 必须为对象`);
+    else {
+      if (visual.dropShadow !== undefined && typeof visual.dropShadow !== "boolean") errors.push(`${entry.name}: visual.dropShadow 必须为布尔值`);
+      if (visual.groundShadow !== undefined) {
+        const shadow = visual.groundShadow;
+        if (!shadow || typeof shadow !== "object" || Array.isArray(shadow)) errors.push(`${entry.name}: visual.groundShadow 必须为对象`);
+        else {
+          if (typeof shadow.enabled !== "boolean") errors.push(`${entry.name}: visual.groundShadow.enabled 必须为布尔值`);
+          if (shadow.width !== undefined && (!Number.isFinite(shadow.width) || shadow.width <= 0 || shadow.width > 2)) errors.push(`${entry.name}: visual.groundShadow.width 必须为 0-2 范围内的正数`);
+          if (shadow.height !== undefined && (!Number.isFinite(shadow.height) || shadow.height <= 0 || shadow.height > 1)) errors.push(`${entry.name}: visual.groundShadow.height 必须为 0-1 范围内的正数`);
+          if (shadow.opacity !== undefined && (!Number.isFinite(shadow.opacity) || shadow.opacity < 0 || shadow.opacity > 0.5)) errors.push(`${entry.name}: visual.groundShadow.opacity 必须为 0-0.5`);
+          if (shadow.blur !== undefined && (!Number.isFinite(shadow.blur) || shadow.blur < 0 || shadow.blur > 32)) errors.push(`${entry.name}: visual.groundShadow.blur 必须为 0-32`);
+        }
+      }
+    }
+  }
   for (const asset of ["preview", "icon"]) {
     const relative = manifest[asset];
     if (!relative) continue;
@@ -51,7 +69,29 @@ for (const entry of characterEntries) {
     if (!stateName.test(state)) { errors.push(`${entry.name}/${state}: 动作名无效`); continue; }
     if (!animation.path || path.isAbsolute(animation.path) || animation.path.includes("..")) { errors.push(`${entry.name}/${state}: 动画路径越出角色目录`); continue; }
     if (!(animation.fps >= 1 && animation.fps <= 60)) errors.push(`${entry.name}/${state}: FPS 必须为 1-60`);
+    if (typeof animation.loop !== "boolean") errors.push(`${entry.name}/${state}: loop 必须为布尔值`);
+    if (animation.priority !== undefined && (!Number.isInteger(animation.priority) || animation.priority < 0 || animation.priority > 1000)) errors.push(`${entry.name}/${state}: priority 必须为 0-1000 的整数`);
+    if (animation.weight !== undefined && (!Number.isFinite(animation.weight) || animation.weight < 0 || animation.weight > 1000)) errors.push(`${entry.name}/${state}: weight 必须为 0-1000`);
+    for (const field of ["minDelayMs", "maxDelayMs"]) if (animation[field] !== undefined && (!Number.isInteger(animation[field]) || animation[field] < 0)) errors.push(`${entry.name}/${state}: ${field} 必须为非负整数`);
     if (animation.minDelayMs !== undefined && animation.maxDelayMs !== undefined && animation.minDelayMs > animation.maxDelayMs) errors.push(`${entry.name}/${state}: minDelayMs 不能大于 maxDelayMs`);
+    if (animation.minDurationMs !== undefined && animation.maxDurationMs !== undefined && animation.minDurationMs > animation.maxDurationMs) errors.push(`${entry.name}/${state}: minDurationMs 不能大于 maxDurationMs`);
+    for (const field of ["minDurationMs", "maxDurationMs"]) {
+      if (animation[field] !== undefined && (!Number.isInteger(animation[field]) || animation[field] < 100 || animation[field] > 120000)) errors.push(`${entry.name}/${state}: ${field} 必须为 100-120000 ms`);
+    }
+    for (const field of ["anticipation", "recovery"]) {
+      if (animation[field] !== undefined && !stateName.test(animation[field])) errors.push(`${entry.name}/${state}: ${field} 动作名无效`);
+    }
+    if (animation.movement) {
+      const movement = animation.movement;
+      if (!Number.isFinite(movement.speed) || movement.speed <= 0 || movement.speed > 500) errors.push(`${entry.name}/${state}: movement.speed 必须为 0-500 范围内的正数`);
+      for (const field of ["acceleration", "deceleration"]) if (movement[field] !== undefined && (!Number.isFinite(movement[field]) || movement[field] <= 0 || movement[field] > 2000)) errors.push(`${entry.name}/${state}: movement.${field} 必须为 0-2000 范围内的正数`);
+      if (movement.edgePadding !== undefined && (!Number.isFinite(movement.edgePadding) || movement.edgePadding < 0 || movement.edgePadding > 512)) errors.push(`${entry.name}/${state}: movement.edgePadding 必须为 0-512`);
+      if (movement.direction !== undefined && !["left", "right"].includes(movement.direction)) errors.push(`${entry.name}/${state}: movement.direction 必须为 left 或 right`);
+      if (movement.reverseTo !== undefined && !stateName.test(movement.reverseTo)) errors.push(`${entry.name}/${state}: movement.reverseTo 动作名无效`);
+    }
+    for (const field of ["offsetX", "offsetY"]) if (animation[field] !== undefined && !Number.isFinite(animation[field])) errors.push(`${entry.name}/${state}: ${field} 必须为有限数值`);
+    if (animation.scale !== undefined && (!Number.isFinite(animation.scale) || animation.scale <= 0 || animation.scale > 10)) errors.push(`${entry.name}/${state}: scale 必须为 0-10 范围内的正数`);
+    if (animation.flipXAllowed !== undefined && typeof animation.flipXAllowed !== "boolean") errors.push(`${entry.name}/${state}: flipXAllowed 必须为布尔值`);
     const directory = path.resolve(characterRoot, animation.path);
     if (!directory.startsWith(characterRoot + path.sep)) { errors.push(`${entry.name}/${state}: 路径越出角色目录`); continue; }
     let files = [];
@@ -85,6 +125,14 @@ for (const entry of characterEntries) {
     }
     if (dimensions.size > 1) errors.push(`${entry.name}/${state}: 同一动作画布尺寸不一致`);
     frameIndex.animations[state] = files.map((file) => path.posix.join(animation.path.replaceAll("\\", "/"), file));
+  }
+  for (const [state, animation] of Object.entries(manifest.animations ?? {})) {
+    for (const field of ["returnTo", "anticipation", "recovery"]) {
+      const target = animation?.[field];
+      if (target && !manifest.animations?.[target]) warnings.push(`${entry.name}/${state}: ${field} 指向缺失动作 ${target}`);
+    }
+    const reverseTarget = animation?.movement?.reverseTo;
+    if (reverseTarget && !manifest.animations?.[reverseTarget]) warnings.push(`${entry.name}/${state}: movement.reverseTo 指向缺失动作 ${reverseTarget}`);
   }
   await writeFile(path.join(characterRoot, "frames.json"), JSON.stringify(frameIndex, null, 2) + "\n");
   index.push({ id: manifest.id, name: manifest.name, manifest: `/characters/${manifest.id}/manifest.json` });

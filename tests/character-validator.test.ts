@@ -33,4 +33,21 @@ describe("validateManifest", () => {
   it("rejects a manifest without idle", () => {
     expect(validateManifest({ ...valid, animations: { click: { path: "animations/click", fps: 8, loop: false } } }).valid).toBe(false);
   });
+  it("keeps schema 1 compatible while accepting optional phase, movement, and visual metadata", () => {
+    const result = validateManifest({
+      ...valid,
+      visual: { dropShadow: false, groundShadow: { enabled: true, opacity: 0.15 } },
+      animations: {
+        idle: valid.animations.idle,
+        prepare: { path: "prepare", fps: 8, loop: false },
+        click: { path: "click", fps: 10, loop: false, anticipation: "prepare", recovery: "idle", movement: { speed: 40, acceleration: 120, deceleration: 160, direction: "left", reverseTo: "walk_right" } },
+        walk_right: { path: "walk_right", fps: 10, loop: true, movement: { speed: 40, direction: "right", reverseTo: "click" } },
+      },
+    });
+    expect(result.valid).toBe(true);
+    expect(result.manifest?.schemaVersion).toBe(1);
+  });
+  it("rejects inverted ambient duration ranges", () => {
+    expect(validateManifest({ ...valid, animations: { idle: { ...valid.animations.idle, minDurationMs: 5000, maxDurationMs: 1000 } } }).valid).toBe(false);
+  });
 });

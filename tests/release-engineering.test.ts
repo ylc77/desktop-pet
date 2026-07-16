@@ -45,4 +45,11 @@ describe("release engineering safeguards", () => {
     expect(readFileSync(resolve(root, "scripts/windows/install-smoke-test.ps1"), "utf8")).toContain("SupportsShouldProcess");
     expect(readFileSync(resolve(root, "scripts/windows/uninstall-smoke-test.ps1"), "utf8")).toContain("SupportsShouldProcess");
   });
+
+  it("keeps developer diagnostics behind the production build gate", () => {
+    const settings = readFileSync(resolve(root, "src/core/settings/settingsSchema.ts"), "utf8");
+    const app = readFileSync(resolve(root, "src/app/App.tsx"), "utf8");
+    expect(settings).toContain("import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEVELOPER_TOOLS === \"true\"");
+    expect(app).toContain("DEVELOPER_TOOLS_ALLOWED && settings.developerPanel");
+  });
 });

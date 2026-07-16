@@ -23,7 +23,7 @@ export function ContextMenu({ position, settings, characters, developerToolsAllo
         onPointerDown={(event) => event.stopPropagation()}
       >
         <button onClick={() => onPatch({ animationsPaused: !settings.animationsPaused })}>{settings.animationsPaused ? "继续动画" : "暂停动画"}</button>
-        <label>大小 <input type="range" min="0.35" max="2" step="0.05" value={settings.scale} onChange={(e) => onPatch({ scale: e.currentTarget.valueAsNumber })} /></label>
+        <label>大小 <input type="range" min="0.1" max="4" step="0.05" value={settings.scale} onChange={(e) => onPatch({ scale: e.currentTarget.valueAsNumber })} /></label>
         <label>透明度 <input type="range" min="0.2" max="1" step="0.05" value={settings.opacity} onChange={(e) => onPatch({ opacity: e.currentTarget.valueAsNumber })} /></label>
         <label>角色 <select value={settings.characterId} onChange={(e) => onPatch({ characterId: e.currentTarget.value })}>{characters.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <button onClick={() => onPatch({ alwaysOnTop: !settings.alwaysOnTop })}>{settings.alwaysOnTop ? "关闭置顶" : "开启置顶"}</button>

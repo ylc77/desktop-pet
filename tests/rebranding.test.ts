@@ -21,7 +21,7 @@ describe("application rebranding", () => {
     expect(config.app.windows[0].title).toBe("七酱桌宠");
   });
 
-  it("keeps the RC version consistent across JavaScript, Tauri, and Cargo", () => {
+  it("keeps the application version consistent across JavaScript, Tauri, and Cargo", () => {
     const cargo = readFileSync(resolve(root, "src-tauri/Cargo.toml"), "utf8");
     const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
     expect(packageJson.version).toBe("0.1.0");
@@ -43,6 +43,12 @@ describe("application rebranding", () => {
     const rust = readFileSync(resolve(root, "src-tauri/src/lib.rs"), "utf8");
     expect(rust).toContain('.tooltip("七酱桌宠")');
     expect(rust).toContain("app.default_window_icon()");
+  });
+
+  it("keeps placeholder generation isolated from the approved application icon", () => {
+    const generator = readFileSync(resolve(root, "scripts/generate-placeholder.mjs"), "utf8");
+    expect(generator).not.toMatch(/src-tauri[\\/]icons/i);
+    expect(generator).not.toContain("app-icon.png");
   });
 
   it("creates and verifies the public installer alias", () => {

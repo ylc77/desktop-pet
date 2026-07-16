@@ -220,11 +220,13 @@ if ($Mode -eq 'Performance') {
     $exitCode = 1
     $invocationError = $null
     try {
+        $LASTEXITCODE = 0
         & "$PSScriptRoot\monitor-process.ps1" -DurationMinutes 15 -IntervalSeconds 10 -OutputPath $csv
-        $exitCode = $LASTEXITCODE
+        $exitCode = [int]$LASTEXITCODE
         if ($exitCode -eq 0) {
+            $LASTEXITCODE = 0
             & "$PSScriptRoot\analyze-performance.ps1" -InputPath $csv -OutputPath ([System.IO.Path]::Combine($performance, 'performance-summary.md')) -JsonOutputPath ([System.IO.Path]::Combine($performance, 'performance-analysis.json'))
-            $exitCode = $LASTEXITCODE
+            $exitCode = [int]$LASTEXITCODE
         }
     } catch {
         $invocationError = $_.Exception.Message

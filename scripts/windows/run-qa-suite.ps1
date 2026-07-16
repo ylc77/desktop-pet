@@ -191,9 +191,9 @@ try {
 
     if ($Mode -ne 'Safe') {
         $actions = if ($UseExistingInstallation) {
-            @('Use the already installed application without running NSIS','Launch the installed app twice and inspect single-instance behavior','Wait for normal tray/context-menu exit','Inspect settings, logs, processes and autostart entries','Run the registered uninstaller and inspect leftovers')
+            @('Use the already installed application without running NSIS','Launch the installed app twice and keep the verified instance running','Capture the complete desktop pet and WebView2 process tree','Wait for normal tray/context-menu exit','Inspect settings, logs, processes and autostart entries','Run the registered uninstaller and inspect leftovers')
         } else {
-            @('Install the current NSIS package for the current user','Launch the installed app twice and inspect single-instance behavior','Wait for normal tray/context-menu exit','Inspect settings, logs, processes and autostart entries','Run the registered uninstaller and inspect leftovers')
+            @('Install the current NSIS package for the current user','Launch the installed app twice and keep the verified instance running','Capture the complete desktop pet and WebView2 process tree','Wait for normal tray/context-menu exit','Inspect settings, logs, processes and autostart entries','Run the registered uninstaller and inspect leftovers')
         }
         Write-Warning ("This mode can change the current Windows user profile:`r`n - " + ($actions -join "`r`n - "))
         if ($Mode -eq 'CleanEnvironment' -and $env:DESK_PET_QA_CLEAN_ENVIRONMENT -ne '1') {
@@ -232,14 +232,38 @@ try {
             if (-not $selection.SelectedRecord) { throw 'No valid installed application record was found for post-install validation.' }
             Add-Result 'Installed executable discovery' 'current-machine' 'passed' '' ("version={0}; path={1}; currentUser={2}" -f $selection.Evaluation.DisplayVersion, $selection.Evaluation.RedactedInstallLocation, $selection.Evaluation.CurrentUser)
             $exe = [string]$selection.ExecutablePath
-            $currentPhase = 'single-instance-and-normal-exit'
-            Assert-QACommand 'Single instance and normal exit' "& .\scripts\windows\process-smoke-test.ps1 -ExecutablePath '$($exe.Replace("'", "''"))' -ManualExitTimeoutSeconds 120 -Confirm:`$false"
+            $currentPhase = 'single-instance-startup'
+            Assert-QACommand 'Single instance startup' "& .\scripts\windows\process-smoke-test.ps1 -ExecutablePath '$($exe.Replace("'", "''"))' -Phase StartAndVerify -Confirm:`$false"
+            $performanceFailure = $null
+            if (-not $SkipPerformance) {
+                try {
+                    $currentPhase = 'performance-capture'
+                    $performanceCsv = Join-Path $output 'performance\short.csv'
+                    $performanceSummary = Join-Path $output 'performance\short-summary.md'
+                    $performanceAnalysis = Join-Path $output 'performance\short-analysis.json'
+                    Write-Host 'Keep the verified application running during the ten-minute performance capture.'
+                    Assert-QACommand 'Ten-minute performance capture' "& .\scripts\windows\monitor-process.ps1 -DurationMinutes 10 -IntervalSeconds 10 -OutputPath '$($performanceCsv.Replace("'", "''"))'"
+                    Assert-QACommand 'Performance aggregate analysis' "& .\scripts\windows\analyze-performance.ps1 -InputPath '$($performanceCsv.Replace("'", "''"))' -OutputPath '$($performanceSummary.Replace("'", "''"))' -JsonOutputPath '$($performanceAnalysis.Replace("'", "''"))'"
+                } catch {
+                    $performanceFailure = $_.Exception.Message
+                }
+            } else {
+                Add-Result 'Performance capture' 'current-machine' 'skipped' '' 'Skipped by -SkipPerformance.'
+            }
+            $normalExitFailure = $null
+            try {
+                $currentPhase = 'normal-exit'
+                if ($SkipPerformance) { Write-Host 'Startup validation is complete. Exit the application normally from its tray or context menu when prompted.' }
+                else { Write-Host 'Performance capture is complete. Exit the application normally from its tray or context menu when prompted.' }
+                Assert-QACommand 'Normal tray or context-menu exit' "& .\scripts\windows\process-smoke-test.ps1 -ExecutablePath '$($exe.Replace("'", "''"))' -Phase WaitForNormalExit -ManualExitTimeoutSeconds 120 -Confirm:`$false"
+            } catch {
+                $normalExitFailure = $_.Exception.Message
+            }
+            if ($performanceFailure -or $normalExitFailure) {
+                throw ("Runtime QA failed: performance={0}; normalExit={1}" -f $(if($performanceFailure){$performanceFailure}else{'passed'}), $(if($normalExitFailure){$normalExitFailure}else{'passed'}))
+            }
             $currentPhase = 'settings-and-logs-inspection'
             Assert-QACommand 'Settings and logs inspection' '& .\scripts\windows\check-runtime-data.ps1'
-            if (-not $SkipPerformance -and (Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue)) {
-                $currentPhase = 'performance-capture'
-                Assert-QACommand 'Ten-minute performance capture' "& .\scripts\windows\monitor-process.ps1 -DurationMinutes 10 -IntervalSeconds 10 -OutputPath '$((Join-Path $output 'performance\short.csv').Replace("'", "''"))'"
-            }
             $currentPhase = 'autostart-inspection'
             Assert-QACommand 'Autostart inspection' "& .\scripts\windows\check-autostart.ps1 -ExpectedExecutable '$($exe.Replace("'", "''"))'"
             $currentPhase = 'uninstallation'

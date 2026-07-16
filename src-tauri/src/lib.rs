@@ -176,6 +176,74 @@ struct FullscreenMonitor {
     auto_hidden: Arc<AtomicBool>,
 }
 
+#[derive(Clone, Copy)]
+enum VisibilityReason {
+    AutoHideDisabled,
+    FullscreenDetected,
+    FullscreenEnded,
+    SingleInstance,
+    TrayActivate,
+    TrayHide,
+    TrayReset,
+}
+
+impl VisibilityReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AutoHideDisabled => "auto-hide-disabled",
+            Self::FullscreenDetected => "fullscreen-detected",
+            Self::FullscreenEnded => "fullscreen-ended",
+            Self::SingleInstance => "single-instance",
+            Self::TrayActivate => "tray-activate",
+            Self::TrayHide => "tray-hide",
+            Self::TrayReset => "tray-reset",
+        }
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VisibilityChanged {
+    visible: bool,
+    reason: &'static str,
+}
+
+fn set_native_visibility<R: Runtime>(
+    window: &WebviewWindow<R>,
+    visible: bool,
+    reason: VisibilityReason,
+) -> bool {
+    let result = if visible {
+        window.show()
+    } else {
+        window.hide()
+    };
+    match result {
+        Ok(()) => {
+            if let Err(error) = window.emit(
+                "pet-visibility-changed",
+                VisibilityChanged {
+                    visible,
+                    reason: reason.as_str(),
+                },
+            ) {
+                log::warn!(
+                    "cannot emit native visibility change (reason={}): {error}",
+                    reason.as_str()
+                );
+            }
+            true
+        }
+        Err(error) => {
+            log::warn!(
+                "cannot change native visibility to {visible} (reason={}): {error}",
+                reason.as_str()
+            );
+            false
+        }
+    }
+}
+
 #[tauri::command]
 fn set_fullscreen_auto_hide(enabled: bool, state: tauri::State<'_, FullscreenMonitor>) {
     state.enabled.store(enabled, Ordering::Relaxed);
@@ -195,8 +263,9 @@ fn foreground_is_fullscreen() -> bool {
         },
         System::Threading::GetCurrentProcessId,
         UI::WindowsAndMessaging::{
-            GetForegroundWindow, GetShellWindow, GetWindowRect, GetWindowThreadProcessId,
-            IsWindowVisible,
+            GetForegroundWindow, GetShellWindow, GetWindowLongPtrW, GetWindowRect,
+            GetWindowThreadProcessId, IsWindowVisible, IsZoomed, GWL_STYLE, WS_CAPTION, WS_POPUP,
+            WS_THICKFRAME,
         },
     };
     unsafe {
@@ -223,11 +292,33 @@ fn foreground_is_fullscreen() -> bool {
         {
             return false;
         }
-        let screen = monitor_info.rcMonitor;
-        window_rect.left <= screen.left
-            && window_rect.top <= screen.top
-            && window_rect.right >= screen.right
-            && window_rect.bottom >= screen.bottom
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        is_fullscreen_candidate(
+            FullscreenWindowInfo {
+                window: PhysicalRect {
+                    left: window_rect.left,
+                    top: window_rect.top,
+                    right: window_rect.right,
+                    bottom: window_rect.bottom,
+                },
+                monitor: PhysicalRect {
+                    left: monitor_info.rcMonitor.left,
+                    top: monitor_info.rcMonitor.top,
+                    right: monitor_info.rcMonitor.right,
+                    bottom: monitor_info.rcMonitor.bottom,
+                },
+                work_area: PhysicalRect {
+                    left: monitor_info.rcWork.left,
+                    top: monitor_info.rcWork.top,
+                    right: monitor_info.rcWork.right,
+                    bottom: monitor_info.rcWork.bottom,
+                },
+                is_zoomed: IsZoomed(hwnd) != 0,
+                is_popup: style & WS_POPUP != 0,
+                has_window_frame: style & (WS_CAPTION | WS_THICKFRAME) != 0,
+            },
+            2,
+        )
     }
 }
 
@@ -248,8 +339,10 @@ fn start_fullscreen_monitor<R: Runtime>(app: AppHandle<R>, state: FullscreenMoni
             if !state.enabled.load(Ordering::Relaxed) {
                 fullscreen_samples = 0;
                 windowed_samples = 0;
-                if state.auto_hidden.swap(false, Ordering::Relaxed) {
-                    let _ = window.show();
+                if state.auto_hidden.load(Ordering::Relaxed)
+                    && set_native_visibility(&window, true, VisibilityReason::AutoHideDisabled)
+                {
+                    state.auto_hidden.store(false, Ordering::Relaxed);
                 }
                 continue;
             }
@@ -257,14 +350,20 @@ fn start_fullscreen_monitor<R: Runtime>(app: AppHandle<R>, state: FullscreenMoni
             if fullscreen {
                 fullscreen_samples = fullscreen_samples.saturating_add(1);
                 windowed_samples = 0;
-                if fullscreen_samples >= 2 && !state.auto_hidden.swap(true, Ordering::Relaxed) {
-                    let _ = window.hide();
+                if fullscreen_samples >= 2
+                    && !state.auto_hidden.load(Ordering::Relaxed)
+                    && set_native_visibility(&window, false, VisibilityReason::FullscreenDetected)
+                {
+                    state.auto_hidden.store(true, Ordering::Relaxed);
                 }
             } else {
                 windowed_samples = windowed_samples.saturating_add(1);
                 fullscreen_samples = 0;
-                if windowed_samples >= 2 && state.auto_hidden.swap(false, Ordering::Relaxed) {
-                    let _ = window.show();
+                if windowed_samples >= 2
+                    && state.auto_hidden.load(Ordering::Relaxed)
+                    && set_native_visibility(&window, true, VisibilityReason::FullscreenEnded)
+                {
+                    state.auto_hidden.store(false, Ordering::Relaxed);
                 }
             }
         }
@@ -296,6 +395,60 @@ impl PhysicalRect {
     fn height(self) -> i32 {
         self.bottom.saturating_sub(self.top).max(0)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FullscreenWindowInfo {
+    window: PhysicalRect,
+    monitor: PhysicalRect,
+    work_area: PhysicalRect,
+    is_zoomed: bool,
+    is_popup: bool,
+    has_window_frame: bool,
+}
+
+fn rect_covers(outer: PhysicalRect, inner: PhysicalRect, tolerance: i32) -> bool {
+    let tolerance = tolerance.max(0);
+    outer.left <= inner.left.saturating_add(tolerance)
+        && outer.top <= inner.top.saturating_add(tolerance)
+        && outer.right >= inner.right.saturating_sub(tolerance)
+        && outer.bottom >= inner.bottom.saturating_sub(tolerance)
+}
+
+fn coordinates_match(left: i32, right: i32, tolerance: i32) -> bool {
+    (left as i64 - right as i64).abs() <= tolerance.max(0) as i64
+}
+
+fn rect_matches(left: PhysicalRect, right: PhysicalRect, tolerance: i32) -> bool {
+    coordinates_match(left.left, right.left, tolerance)
+        && coordinates_match(left.top, right.top, tolerance)
+        && coordinates_match(left.right, right.right, tolerance)
+        && coordinates_match(left.bottom, right.bottom, tolerance)
+}
+
+fn is_fullscreen_candidate(candidate: FullscreenWindowInfo, tolerance: i32) -> bool {
+    if !rect_covers(candidate.window, candidate.monitor, tolerance) {
+        return false;
+    }
+
+    // Borderless fullscreen applications normally use WS_POPUP. Keep those
+    // candidates even if Windows also reports the window as zoomed.
+    if candidate.is_popup {
+        return true;
+    }
+
+    // A framed, zoomed top-level window is the normal desktop maximize shape.
+    // Reject it even when an auto-hidden taskbar makes work and monitor
+    // rectangles identical. A frameless browser fullscreen window may still
+    // report IsZoomed, so retain that candidate.
+    if candidate.is_zoomed && candidate.has_window_frame {
+        return false;
+    }
+
+    // This also rejects unusual non-zoomed shells constrained to the work area,
+    // while retaining borderless windows that actually cover the monitor.
+    !rect_matches(candidate.window, candidate.work_area, tolerance)
+        || rect_matches(candidate.work_area, candidate.monitor, tolerance)
 }
 
 fn intersection_area(left: PhysicalRect, right: PhysicalRect) -> u64 {
@@ -452,8 +605,9 @@ fn clamp_window_to_visible_area<R: Runtime>(window: &WebviewWindow<R>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        centered_position, intersection_area, logical_to_physical, read_settings_at_path,
-        window_is_visible_in_work_area, write_settings_at_path, PhysicalRect,
+        centered_position, intersection_area, is_fullscreen_candidate, logical_to_physical,
+        read_settings_at_path, window_is_visible_in_work_area, write_settings_at_path,
+        FullscreenWindowInfo, PhysicalRect,
     };
     use tauri::{PhysicalPosition, PhysicalSize};
 
@@ -588,6 +742,161 @@ mod tests {
         assert_eq!(intersection_area(window, right), 60_000);
     }
 
+    fn fullscreen_info(
+        window: PhysicalRect,
+        is_zoomed: bool,
+        is_popup: bool,
+        has_window_frame: bool,
+    ) -> FullscreenWindowInfo {
+        FullscreenWindowInfo {
+            window,
+            monitor: PhysicalRect {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            work_area: PhysicalRect {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1040,
+            },
+            is_zoomed,
+            is_popup,
+            has_window_frame,
+        }
+    }
+
+    #[test]
+    fn ordinary_maximized_work_area_window_is_not_fullscreen() {
+        assert!(!is_fullscreen_candidate(
+            fullscreen_info(
+                PhysicalRect {
+                    left: -8,
+                    top: -8,
+                    right: 1928,
+                    bottom: 1048,
+                },
+                true,
+                false,
+                true,
+            ),
+            2,
+        ));
+    }
+
+    #[test]
+    fn zoomed_non_popup_is_rejected_when_taskbar_auto_hides() {
+        let monitor = PhysicalRect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        assert!(!is_fullscreen_candidate(
+            FullscreenWindowInfo {
+                window: monitor,
+                monitor,
+                work_area: monitor,
+                is_zoomed: true,
+                is_popup: false,
+                has_window_frame: true,
+            },
+            2,
+        ));
+    }
+
+    #[test]
+    fn popup_fullscreen_candidate_is_retained() {
+        assert!(is_fullscreen_candidate(
+            fullscreen_info(
+                PhysicalRect {
+                    left: 0,
+                    top: 0,
+                    right: 1920,
+                    bottom: 1080,
+                },
+                true,
+                true,
+                false,
+            ),
+            2,
+        ));
+    }
+
+    #[test]
+    fn borderless_fullscreen_candidate_is_retained() {
+        assert!(is_fullscreen_candidate(
+            fullscreen_info(
+                PhysicalRect {
+                    left: 0,
+                    top: 0,
+                    right: 1920,
+                    bottom: 1080,
+                },
+                false,
+                false,
+                false,
+            ),
+            2,
+        ));
+    }
+
+    #[test]
+    fn zoomed_frameless_non_popup_fullscreen_candidate_is_retained() {
+        assert!(is_fullscreen_candidate(
+            fullscreen_info(
+                PhysicalRect {
+                    left: 0,
+                    top: 0,
+                    right: 1920,
+                    bottom: 1080,
+                },
+                true,
+                false,
+                false,
+            ),
+            2,
+        ));
+    }
+
+    #[test]
+    fn fullscreen_candidate_allows_two_pixel_rounding_tolerance() {
+        assert!(is_fullscreen_candidate(
+            fullscreen_info(
+                PhysicalRect {
+                    left: 2,
+                    top: 1,
+                    right: 1918,
+                    bottom: 1079,
+                },
+                false,
+                true,
+                false,
+            ),
+            2,
+        ));
+    }
+
+    #[test]
+    fn undersized_borderless_window_is_not_fullscreen() {
+        assert!(!is_fullscreen_candidate(
+            fullscreen_info(
+                PhysicalRect {
+                    left: 3,
+                    top: 0,
+                    right: 1917,
+                    bottom: 1080,
+                },
+                false,
+                true,
+                false,
+            ),
+            2,
+        ));
+    }
+
     #[test]
     fn dpi_scale_conversion_handles_common_scales_and_invalid_values() {
         assert_eq!(logical_to_physical(100.0, 1.0), Some(100));
@@ -660,11 +969,17 @@ mod tests {
     }
 }
 
-fn show_main<R: Runtime>(app: &AppHandle<R>) {
+fn show_main<R: Runtime>(app: &AppHandle<R>, reason: VisibilityReason) {
     if let Some(window) = app.get_webview_window("main") {
         clamp_window_to_visible_area(&window);
-        let _ = window.show();
-        let _ = window.set_focus();
+        if set_native_visibility(&window, true, reason) {
+            if let Err(error) = window.set_focus() {
+                log::warn!(
+                    "cannot focus main window (reason={}): {error}",
+                    reason.as_str()
+                );
+            }
+        }
     }
 }
 
@@ -701,13 +1016,13 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "quit" => app.exit(0),
             "hide" => {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
+                    set_native_visibility(&window, false, VisibilityReason::TrayHide);
                 }
             }
             "reset" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_position(Position::Physical(PhysicalPosition::new(40, 40)));
-                    show_main(app);
+                    show_main(app, VisibilityReason::TrayReset);
                 }
             }
             action => {
@@ -721,7 +1036,7 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 ..
             } = event
             {
-                show_main(tray.app_handle());
+                show_main(tray.app_handle(), VisibilityReason::TrayActivate);
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -745,7 +1060,7 @@ pub fn run() {
             quarantine_invalid_settings_file
         ])
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main(app)
+            show_main(app, VisibilityReason::SingleInstance)
         }))
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -769,7 +1084,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(
                 event,
-                WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+                WindowEvent::Moved(_)
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::Focused(true)
+                    | WindowEvent::ScaleFactorChanged { .. }
             ) {
                 if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
                     clamp_window_to_visible_area(&webview);

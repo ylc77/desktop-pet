@@ -66,7 +66,7 @@ npm run build:release
 5. 运行 `npm run validate:characters`。脚本会重建 `characters/index.json` 和每个角色的 `frames.json`。
 6. 在程序中选择“重新加载角色资源”，无需重启应用。
 
-正式角色制作前必须先确认角色类型、画风、比例、配色、服装或外壳和标志性特征。详见 [角色资源包制作说明](docs/CHARACTER_PACK.md)。
+正式角色制作前必须先确认角色类型、画风、比例、配色、服装或外壳和标志性特征。接入格式见 [角色资源包制作说明](docs/CHARACTER_PACK.md)，正式素材的制作与版权要求见 [高保真角色素材制作规范](docs/HIGH_FIDELITY_CHARACTER_ASSET_GUIDE.md)，人工审核使用 [角色视觉人工验收清单](docs/CHARACTER_VISUAL_REVIEW_CHECKLIST.md)。当前正式路径仍是 `schemaVersion: 1` 的 PNG 序列帧；技术校验通过不等于正式美术通过。
 
 ## 调试
 

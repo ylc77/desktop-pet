@@ -20,4 +20,7 @@ describe("settings schema", () => {
   it("accepts finite off-screen coordinates for the native recovery layer", () => {
     expect(appSettingsSchema.parse({ ...DEFAULT_SETTINGS, position: { x: -100000, y: 100000 } }).position).toEqual({ x: -100000, y: 100000 });
   });
+  it.each([0.1, 0.25, 2, 4])("preserves schema-compatible character scale %s", (scale) => {
+    expect(appSettingsSchema.parse({ ...DEFAULT_SETTINGS, scale }).scale).toBe(scale);
+  });
 });

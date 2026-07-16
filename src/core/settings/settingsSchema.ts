@@ -3,7 +3,7 @@ import { z } from "zod";
 export const appSettingsSchema = z.object({
   position: z.object({ x: z.number(), y: z.number() }).nullable(),
   monitorName: z.string().nullable(),
-  scale: z.number().min(0.35).max(2),
+  scale: z.number().min(0.1).max(4),
   opacity: z.number().min(0.2).max(1),
   characterId: z.string().min(1),
   skinId: z.string().min(1),
