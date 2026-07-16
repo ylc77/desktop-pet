@@ -34,7 +34,11 @@ export function createNativeUpdaterClient(): UpdaterClient {
         if (message.event === "started") onProgress({ chunkLength: 0, contentLength: message.data?.contentLength ?? null });
         if (message.event === "progress") onProgress({ chunkLength: message.data?.chunkLength ?? 0, contentLength: message.data?.contentLength ?? null });
       };
-      await invoke("download_update", { onEvent: channel });
+      try {
+        await invoke("download_update", { onEvent: channel });
+      } finally {
+        channel.onmessage = () => undefined;
+      }
     },
     async install() {
       if (!isTauriRuntime()) throw { category: "unsupported", message: "当前环境不支持应用更新" };

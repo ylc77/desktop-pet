@@ -19,6 +19,10 @@ function safeSettingsSummary(settings: AppSettings): Record<string, unknown> {
     hideInFullscreen: settings.hideInFullscreen,
     interactionsEnabled: settings.interactionsEnabled,
     automaticUpdateChecks: settings.automaticUpdateChecks,
+    updateLastFailureCategory: settings.updateLastFailureCategory,
+    pendingUpdateVersion: settings.pendingUpdateVersion,
+    lastConfirmedUpdateVersion: settings.lastConfirmedUpdateVersion,
+    updateLastFailedVersion: settings.updateLastFailedVersion,
     hasSavedPosition: settings.position !== null,
     facing: settings.facing,
   };

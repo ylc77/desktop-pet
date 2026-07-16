@@ -5,6 +5,7 @@ import { log } from "../../core/diagnostics/logger";
 import type { AppSettings } from "../../core/settings/settingsSchema";
 import type { UpdaterStore } from "../../core/updater/updaterStore";
 import { UpdatePanel } from "../UpdatePanel/UpdatePanel";
+import appIconUrl from "../../../app-icon.png";
 
 interface Props {
   settings: AppSettings;
@@ -36,14 +37,14 @@ export function AboutPanel({ settings, character, updaterStore, onPatch, onInsta
   };
 
   const confirmReset = async () => {
-    const confirmed = window.confirm("确定恢复默认设置吗？窗口、缩放、互动、置顶、开机启动、全屏隐藏和更新偏好将重置；角色包、当前角色、日志和应用不会被删除。");
+    const confirmed = window.confirm("确定恢复默认设置吗？窗口位置、缩放、互动、置顶、全屏隐藏和更新偏好将重置；开机启动、透明度、音量、当前角色、角色包、日志和应用保持不变。");
     if (!confirmed) return;
     try {
       await onReset();
       if (mounted.current) setFeedback("已恢复默认设置并将窗口移回可见区域。");
     } catch (error) {
       log("warn", "恢复默认设置失败", error);
-      if (mounted.current) setFeedback("恢复默认设置失败，原设置仍然保留。请查看日志。");
+      if (mounted.current) setFeedback("恢复默认设置未完全完成；部分设置可能已保存，请查看日志。");
     }
   };
 
@@ -52,16 +53,20 @@ export function AboutPanel({ settings, character, updaterStore, onPatch, onInsta
       <header><strong>关于七酱桌宠</strong><button onClick={onClose} aria-label="关闭关于">×</button></header>
       <div className="about-scroll">
         <section>
-          <h2>七酱桌宠</h2>
+          <div className="about-brand">
+            <img className="about-app-icon" src={appIconUrl} alt="七酱桌宠白猫图标" />
+            <h2>七酱桌宠</h2>
+          </div>
           <p>版本：{updater.configuration?.currentVersion ?? "读取中…"}</p>
           <p>更新渠道：{updater.configuration?.channel ?? "beta"}</p>
           <p>上次检查：{settings.updateLastCheckAt ? new Date(settings.updateLastCheckAt).toLocaleString("zh-CN") : "尚未检查"}</p>
+          <label className="about-update-toggle"><input type="checkbox" checked={settings.automaticUpdateChecks} onChange={(event) => onPatch({ automaticUpdateChecks: event.currentTarget.checked })} /> 启动后自动检查更新</label>
         </section>
         <UpdatePanel
           store={updaterStore}
           skippedVersion={settings.updateSkippedVersion}
-          onSkip={(version) => { onPatch({ updateSkippedVersion: version }); updaterStore.later(); }}
-          onLater={() => updaterStore.later()}
+          onSkip={async (version) => { if (await updaterStore.skip()) onPatch({ updateSkippedVersion: version }); }}
+          onLater={async () => { await updaterStore.later(); }}
           onInstall={onInstall}
         />
         <section className="about-actions">

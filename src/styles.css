@@ -45,6 +45,9 @@ button { color: inherit; }
 .about-scroll h2 { margin: 10px 0 5px; font-size: 20px; }
 .about-scroll h3 { margin: 10px 0 5px; font-size: 13px; }
 .about-scroll p { margin: 5px 0; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.about-brand { display: flex; align-items: center; gap: 10px; }
+.about-app-icon { width: 48px; height: 48px; border-radius: 11px; object-fit: cover; }
+.about-update-toggle { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 11px; }
 .about-scroll details { margin-top: 8px; padding: 7px; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; font-size: 11px; }
 .update-panel { margin-top: 10px; padding: 9px; border: 1px solid rgba(142,164,214,.24); border-radius: 9px; background: rgba(70,87,128,.16); }
 .panel-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

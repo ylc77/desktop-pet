@@ -22,10 +22,11 @@ export const appSettingsSchema = z.object({
   updateLastFailureCategory: z.enum([
     "notConfigured", "offline", "timeout", "endpointNotFound", "invalidMetadata",
     "invalidSignature", "downloadInterrupted", "permissionDenied", "installFailed",
-    "unsupported", "busy", "unknown",
+    "restartFailed", "unsupported", "busy", "unknown",
   ]).nullable(),
   pendingUpdateVersion: z.string().nullable(),
   lastConfirmedUpdateVersion: z.string().nullable(),
+  updateLastFailedVersion: z.string().nullable(),
 });
 
 export type AppSettings = z.infer<typeof appSettingsSchema>;
@@ -53,12 +54,25 @@ export const DEFAULT_SETTINGS: AppSettings = {
   updateLastFailureCategory: null,
   pendingUpdateVersion: null,
   lastConfirmedUpdateVersion: null,
+  updateLastFailedVersion: null,
 };
 
 export function resetSettingsPreservingCharacter(current: AppSettings): AppSettings {
   return {
-    ...DEFAULT_SETTINGS,
-    characterId: current.characterId,
-    skinId: current.skinId,
+    ...current,
+    position: DEFAULT_SETTINGS.position,
+    monitorName: DEFAULT_SETTINGS.monitorName,
+    scale: DEFAULT_SETTINGS.scale,
+    alwaysOnTop: DEFAULT_SETTINGS.alwaysOnTop,
+    animationsPaused: DEFAULT_SETTINGS.animationsPaused,
+    hideInFullscreen: DEFAULT_SETTINGS.hideInFullscreen,
+    interactionsEnabled: DEFAULT_SETTINGS.interactionsEnabled,
+    facing: DEFAULT_SETTINGS.facing,
+    automaticUpdateChecks: DEFAULT_SETTINGS.automaticUpdateChecks,
+    updateLastCheckAt: DEFAULT_SETTINGS.updateLastCheckAt,
+    updateLastAvailableVersion: DEFAULT_SETTINGS.updateLastAvailableVersion,
+    updateSkippedVersion: DEFAULT_SETTINGS.updateSkippedVersion,
+    updateLastFailureCategory: DEFAULT_SETTINGS.updateLastFailureCategory,
+    updateLastFailedVersion: DEFAULT_SETTINGS.updateLastFailedVersion,
   };
 }

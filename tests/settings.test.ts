@@ -18,6 +18,7 @@ describe("settings schema", () => {
     expect(result.settings.opacity).toBe(DEFAULT_SETTINGS.opacity);
     expect(result.settings.automaticUpdateChecks).toBe(true);
     expect(result.settings.updateLastCheckAt).toBeNull();
+    expect(result.settings.updateLastFailedVersion).toBeNull();
   });
   it("round-trips updater preferences", () => {
     const settings = appSettingsSchema.parse({
@@ -26,23 +27,34 @@ describe("settings schema", () => {
       updateLastCheckAt: "2026-07-16T00:00:00Z",
       updateSkippedVersion: "0.2.0-beta.1",
       updateLastFailureCategory: "timeout",
+      updateLastFailedVersion: "0.2.0-beta.1",
     });
-    expect(settings).toMatchObject({ automaticUpdateChecks: false, updateSkippedVersion: "0.2.0-beta.1", updateLastFailureCategory: "timeout" });
+    expect(settings).toMatchObject({ automaticUpdateChecks: false, updateSkippedVersion: "0.2.0-beta.1", updateLastFailureCategory: "timeout", updateLastFailedVersion: "0.2.0-beta.1" });
   });
-  it("reset preserves the selected character but clears updater and runtime preferences", () => {
+  it("reset changes only window, animation/behavior, and updater preferences", () => {
     const reset = resetSettingsPreservingCharacter({
       ...DEFAULT_SETTINGS,
       characterId: "personal-pet",
       skinId: "blue",
       scale: 2,
+      opacity: 0.55,
+      autostart: true,
+      volume: 0.25,
       automaticUpdateChecks: false,
       updateSkippedVersion: "0.2.0-beta.1",
+      pendingUpdateVersion: "0.2.0-beta.1",
+      lastConfirmedUpdateVersion: "0.1.0",
     });
     expect(reset.characterId).toBe("personal-pet");
     expect(reset.skinId).toBe("blue");
     expect(reset.scale).toBe(DEFAULT_SETTINGS.scale);
     expect(reset.automaticUpdateChecks).toBe(true);
     expect(reset.updateSkippedVersion).toBeNull();
+    expect(reset.opacity).toBe(0.55);
+    expect(reset.autostart).toBe(true);
+    expect(reset.volume).toBe(0.25);
+    expect(reset.pendingUpdateVersion).toBe("0.2.0-beta.1");
+    expect(reset.lastConfirmedUpdateVersion).toBe("0.1.0");
   });
   it("accepts finite off-screen coordinates for the native recovery layer", () => {
     expect(appSettingsSchema.parse({ ...DEFAULT_SETTINGS, position: { x: -100000, y: 100000 } }).position).toEqual({ x: -100000, y: 100000 });

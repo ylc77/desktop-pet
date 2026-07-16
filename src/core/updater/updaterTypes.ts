@@ -8,6 +8,8 @@ export type UpdaterStatus =
   | "readyToInstall"
   | "installing"
   | "restarting"
+  | "postponed"
+  | "skipped"
   | "cancelled"
   | "error";
 
@@ -21,6 +23,7 @@ export type UpdaterFailureCategory =
   | "downloadInterrupted"
   | "permissionDenied"
   | "installFailed"
+  | "restartFailed"
   | "unsupported"
   | "busy"
   | "unknown";

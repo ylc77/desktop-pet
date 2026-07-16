@@ -70,11 +70,23 @@ describe("UpdaterStore", () => {
   });
 
   it("respects skipped version automatically but manual check still shows it", async () => {
-    const { store } = await readyStore();
+    const { store, mock } = await readyStore();
     await store.check({ manual: false, skippedVersion: available.version });
-    expect(store.getSnapshot().status).toBe("upToDate");
+    expect(store.getSnapshot().status).toBe("skipped");
+    expect(mock.cancelPending).toHaveBeenCalledTimes(1);
     await store.check({ manual: true, skippedVersion: available.version });
     expect(store.getSnapshot().status).toBe("available");
+  });
+
+  it("releases a native same-version or downgrade candidate", async () => {
+    for (const candidateVersion of ["0.1.0", "0.0.9"]) {
+      const mock = client({ check: vi.fn().mockResolvedValue({ ...available, version: candidateVersion }) });
+      const store = new UpdaterStore(mock);
+      await store.initialize();
+      await store.check({ manual: true });
+      expect(store.getSnapshot().status).toBe("upToDate");
+      expect(mock.cancelPending).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("a higher version is not hidden by a previously skipped lower one", async () => {
@@ -195,6 +207,23 @@ describe("UpdaterStore", () => {
     expect(store.getSnapshot().status).toBe("restarting");
   });
 
+  it("drives download, verification preparation, install and fallback relaunch from one action", async () => {
+    const order: string[] = [];
+    const mock = client({
+      download: vi.fn(async (onProgress) => {
+        order.push("download");
+        onProgress({ chunkLength: 100, contentLength: 100 });
+      }),
+      install: vi.fn(async () => { order.push("install"); }),
+      relaunch: vi.fn(async () => { order.push("relaunch"); }),
+    });
+    const { store } = await readyStore(mock);
+    await store.check({ manual: true });
+    await store.updateNow({ beforeInstall: async () => { order.push("save"); } });
+    expect(order).toEqual(["download", "save", "install", "relaunch"]);
+    expect(store.getSnapshot().status).toBe("restarting");
+  });
+
   it("does not relaunch when state flush or installation fails", async () => {
     for (const beforeInstallFails of [true, false]) {
       const mock = client({ install: beforeInstallFails ? vi.fn() : vi.fn().mockRejectedValue({ category: "installFailed", message: "failed" }) });
@@ -208,6 +237,48 @@ describe("UpdaterStore", () => {
       expect(store.getSnapshot().status).toBe("readyToInstall");
       expect(mock.download).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("retries only relaunch after a restart failure and never runs install twice", async () => {
+    const relaunch = vi.fn()
+      .mockRejectedValueOnce(new Error("restart unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const mock = client({ relaunch });
+    const { store } = await readyStore(mock);
+    await store.check({ manual: true });
+    await store.download();
+    await store.install({ beforeInstall: vi.fn().mockResolvedValue(undefined) });
+    expect(store.getSnapshot()).toMatchObject({ status: "error", error: { category: "restartFailed" } });
+    expect(mock.install).toHaveBeenCalledTimes(1);
+
+    await store.retry();
+    expect(mock.install).toHaveBeenCalledTimes(1);
+    expect(relaunch).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().status).toBe("restarting");
+  });
+
+  it("releases native pending state when postponing or skipping", async () => {
+    const postponed = await readyStore();
+    await postponed.store.check({ manual: true });
+    await expect(postponed.store.later()).resolves.toBe(true);
+    expect(postponed.mock.cancelPending).toHaveBeenCalledTimes(1);
+    expect(postponed.store.getSnapshot().status).toBe("postponed");
+
+    const skipped = await readyStore();
+    await skipped.store.check({ manual: true });
+    await expect(skipped.store.skip()).resolves.toBe(true);
+    expect(skipped.mock.cancelPending).toHaveBeenCalledTimes(1);
+    expect(skipped.store.getSnapshot().status).toBe("skipped");
+  });
+
+  it("does not claim a version was skipped when native pending release fails", async () => {
+    const { store } = await readyStore(client({
+      cancelPending: vi.fn().mockRejectedValue(new Error("release failed")),
+    }));
+    await store.check({ manual: true });
+    await expect(store.skip()).resolves.toBe(false);
+    expect(store.getSnapshot().status).toBe("error");
+    expect(store.getSnapshot().reason).toMatch(/释放待处理更新失败/);
   });
 
   it("only cancels a pending non-running update", async () => {

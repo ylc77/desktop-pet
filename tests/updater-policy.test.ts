@@ -4,6 +4,7 @@ import {
   compareSemver,
   isVersionNewer,
   parseSemver,
+  reconcilePendingUpdate,
   shouldRunAutomaticCheck,
   startupCheckDelayMs,
 } from "../src/core/updater/updaterPolicy";
@@ -52,9 +53,26 @@ describe("updater policy", () => {
     expect(shouldRunAutomaticCheck("not-a-date", Date.now())).toBe(true);
   });
 
-  it("keeps startup delay in the 10 to 30 second window", () => {
-    expect(startupCheckDelayMs(-1)).toBe(10_000);
-    expect(startupCheckDelayMs(0.5)).toBe(20_000);
-    expect(startupCheckDelayMs(2)).toBe(30_000);
+  it("uses a fixed 15 second startup delay", () => {
+    expect(startupCheckDelayMs()).toBe(15_000);
+  });
+
+  it("clears a pending target only after the running version matches", () => {
+    expect(reconcilePendingUpdate("0.2.0", "0.2.0", null)).toEqual({ status: "installed", version: "0.2.0" });
+    expect(reconcilePendingUpdate("0.1.0", "0.2.0", null)).toEqual({
+      status: "notInstalled",
+      currentVersion: "0.1.0",
+      targetVersion: "0.2.0",
+      notify: true,
+    });
+  });
+
+  it("reports the same unconfirmed target only once while preserving it", () => {
+    expect(reconcilePendingUpdate("0.1.0", "0.2.0", "0.2.0")).toMatchObject({
+      status: "notInstalled",
+      targetVersion: "0.2.0",
+      notify: false,
+    });
+    expect(reconcilePendingUpdate("0.1.0", null, "0.2.0")).toEqual({ status: "none" });
   });
 });

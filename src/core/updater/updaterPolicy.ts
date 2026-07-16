@@ -1,7 +1,6 @@
 const SEMVER_PATTERN = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 export const AUTOMATIC_UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1_000;
-export const MIN_STARTUP_CHECK_DELAY_MS = 10_000;
-export const MAX_STARTUP_CHECK_DELAY_MS = 30_000;
+export const STARTUP_CHECK_DELAY_MS = 15_000;
 
 interface ParsedSemver {
   core: [number, number, number];
@@ -57,7 +56,26 @@ export function shouldRunAutomaticCheck(lastCheckAt: string | null, nowMs = Date
   return nowMs - previous >= AUTOMATIC_UPDATE_INTERVAL_MS;
 }
 
-export function startupCheckDelayMs(randomValue = Math.random()): number {
-  const normalized = Math.min(1, Math.max(0, randomValue));
-  return Math.round(MIN_STARTUP_CHECK_DELAY_MS + normalized * (MAX_STARTUP_CHECK_DELAY_MS - MIN_STARTUP_CHECK_DELAY_MS));
+export function startupCheckDelayMs(): number {
+  return STARTUP_CHECK_DELAY_MS;
+}
+
+export type PendingUpdateReconciliation =
+  | { status: "none" }
+  | { status: "installed"; version: string }
+  | { status: "notInstalled"; currentVersion: string; targetVersion: string; notify: boolean };
+
+export function reconcilePendingUpdate(
+  currentVersion: string,
+  pendingVersion: string | null,
+  lastFailedVersion: string | null,
+): PendingUpdateReconciliation {
+  if (!pendingVersion) return { status: "none" };
+  if (currentVersion === pendingVersion) return { status: "installed", version: currentVersion };
+  return {
+    status: "notInstalled",
+    currentVersion,
+    targetVersion: pendingVersion,
+    notify: lastFailedVersion !== pendingVersion,
+  };
 }

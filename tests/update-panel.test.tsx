@@ -66,7 +66,7 @@ describe("UpdatePanel", () => {
     expect(screen.getByText("0.2.0-beta.1")).toBeInTheDocument();
     expect(screen.getByText("安装包大小：100 B")).toBeInTheDocument();
     expect(screen.getByText("修复稳定性问题")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "下载更新" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "立即更新" })).toBeEnabled();
   });
 
   it("renders release notes as text rather than HTML", async () => {
@@ -87,15 +87,18 @@ describe("UpdatePanel", () => {
     expect(screen.getByText(/此前已跳过/)).toBeInTheDocument();
   });
 
-  it("invokes later and skip callbacks without cancelling the store", async () => {
+  it("invokes the explicit update, later and skip actions", async () => {
     const store = new UpdaterStore(mockClient());
     const later = vi.fn();
     const skip = vi.fn();
+    const install = vi.fn().mockResolvedValue(undefined);
     await store.initialize();
     await store.check({ manual: true });
-    render(<UpdatePanel store={store} skippedVersion={null} onSkip={skip} onLater={later} onInstall={vi.fn()} />);
+    render(<UpdatePanel store={store} skippedVersion={null} onSkip={skip} onLater={later} onInstall={install} />);
+    fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
     fireEvent.click(screen.getByRole("button", { name: "稍后提醒" }));
     fireEvent.click(screen.getByRole("button", { name: "跳过此版本" }));
+    expect(install).toHaveBeenCalledTimes(1);
     expect(later).toHaveBeenCalledTimes(1);
     expect(skip).toHaveBeenCalledWith(update.version);
     expect(store.getSnapshot().status).toBe("available");
@@ -110,12 +113,13 @@ describe("UpdatePanel", () => {
     const store = new UpdaterStore(api);
     await store.initialize();
     await store.check({ manual: true });
-    render(<UpdatePanel store={store} skippedVersion={null} onSkip={vi.fn()} onLater={vi.fn()} onInstall={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "下载更新" }));
+    render(<UpdatePanel store={store} skippedVersion={null} onSkip={vi.fn()} onLater={vi.fn()} onInstall={() => store.updateNow({ beforeInstall: async () => undefined })} />);
+    fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
     expect(await screen.findByText(/总大小未知/)).toBeInTheDocument();
+    expect(screen.getByText(/正在下载并验证更新包/)).toBeInTheDocument();
     expect(screen.queryByText("100%")).not.toBeInTheDocument();
     finish();
-    await waitFor(() => expect(store.getSnapshot().status).toBe("readyToInstall"));
+    await waitFor(() => expect(store.getSnapshot().status).toBe("restarting"));
   });
 
   it("displays a signature failure and never offers install", async () => {
@@ -123,10 +127,10 @@ describe("UpdatePanel", () => {
     const store = new UpdaterStore(api);
     await store.initialize();
     await store.check({ manual: true });
-    render(<UpdatePanel store={store} skippedVersion={null} onSkip={vi.fn()} onLater={vi.fn()} onInstall={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "下载更新" }));
+    render(<UpdatePanel store={store} skippedVersion={null} onSkip={vi.fn()} onLater={vi.fn()} onInstall={() => store.updateNow({ beforeInstall: async () => undefined })} />);
+    fireEvent.click(screen.getByRole("button", { name: "立即更新" }));
     expect(await screen.findByText(/签名验证失败/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "立即安装并重启" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "继续安装并重启" })).not.toBeInTheDocument();
   });
 
   it("disables another check after a verified download is ready", async () => {
@@ -136,7 +140,7 @@ describe("UpdatePanel", () => {
     await store.download();
     render(<UpdatePanel store={store} skippedVersion={null} onSkip={vi.fn()} onLater={vi.fn()} onInstall={vi.fn()} />);
     expect(screen.getByRole("button", { name: "检查更新" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "立即安装并重启" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "继续安装并重启" })).toBeEnabled();
   });
 
   it("unsubscribes cleanly when the component unmounts", async () => {
@@ -163,9 +167,47 @@ describe("UpdatePanel", () => {
     expect(screen.getByRole("heading", { name: "七酱桌宠" })).toBeInTheDocument();
     expect(screen.getByText("版本：0.1.0")).toBeInTheDocument();
     expect(screen.getByText("更新渠道：beta")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "七酱桌宠白猫图标" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "启动后自动检查更新" })).toBeChecked();
     expect(screen.getByText(/自动更新已配置，但仍需完成真实两版本升级验证/)).toBeInTheDocument();
     expect(screen.queryByText(/生产更新密钥和公网更新地址也尚未配置/)).not.toBeInTheDocument();
     expect(screen.queryByText(/编辑 endpoint|强制签名通过|允许降级/i)).not.toBeInTheDocument();
+  });
+
+  it("changes the automatic-check preference from About", async () => {
+    const onPatch = vi.fn();
+    const store = new UpdaterStore(mockClient());
+    await store.initialize();
+    render(<AboutPanel
+      settings={DEFAULT_SETTINGS}
+      character={makeCharacter()}
+      updaterStore={store}
+      onPatch={onPatch}
+      onInstall={vi.fn()}
+      onReset={vi.fn()}
+      onClose={vi.fn()}
+    />);
+    fireEvent.click(screen.getByRole("checkbox", { name: "启动后自动检查更新" }));
+    expect(onPatch).toHaveBeenCalledWith({ automaticUpdateChecks: false });
+  });
+
+  it("releases the native pending update before showing postponed", async () => {
+    const api = mockClient();
+    const store = new UpdaterStore(api);
+    await store.initialize();
+    await store.check({ manual: true });
+    render(<AboutPanel
+      settings={DEFAULT_SETTINGS}
+      character={makeCharacter()}
+      updaterStore={store}
+      onPatch={vi.fn()}
+      onInstall={vi.fn()}
+      onReset={vi.fn()}
+      onClose={vi.fn()}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "稍后提醒" }));
+    expect(await screen.findByText(/本次待处理更新已安全释放/)).toBeInTheDocument();
+    expect(api.cancelPending).toHaveBeenCalledTimes(1);
   });
 
   it("keeps asynchronous About feedback working under StrictMode effect replay", async () => {
@@ -188,11 +230,30 @@ describe("UpdatePanel", () => {
     expect(reset).toHaveBeenCalledTimes(1);
   });
 
+  it("does not claim old settings survived when reset partially fails", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const store = new UpdaterStore(mockClient());
+    await store.initialize();
+    render(<AboutPanel
+      settings={DEFAULT_SETTINGS}
+      character={makeCharacter()}
+      updaterStore={store}
+      onPatch={vi.fn()}
+      onInstall={vi.fn()}
+      onReset={vi.fn().mockRejectedValue(new Error("window restore failed"))}
+      onClose={vi.fn()}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "恢复默认设置" }));
+    expect(await screen.findByText(/部分设置可能已保存/)).toBeInTheDocument();
+    expect(screen.queryByText(/原设置仍然保留/)).not.toBeInTheDocument();
+  });
+
   it("requires confirmation before restoring defaults from Settings", () => {
     const reset = vi.fn();
     const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
     render(<SettingsPanel
       settings={DEFAULT_SETTINGS}
+      updaterConfigured={true}
       onPatch={vi.fn()}
       onCheckUpdates={vi.fn()}
       onAbout={vi.fn()}
@@ -205,5 +266,19 @@ describe("UpdatePanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "恢复默认设置" }));
     expect(confirm).toHaveBeenCalledTimes(2);
     expect(reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the disabled updater state directly in Settings", () => {
+    render(<SettingsPanel
+      settings={DEFAULT_SETTINGS}
+      updaterConfigured={false}
+      onPatch={vi.fn()}
+      onCheckUpdates={vi.fn()}
+      onAbout={vi.fn()}
+      onReset={vi.fn()}
+      onClose={vi.fn()}
+    />);
+    expect(screen.getByText(/更新服务尚未配置/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "检查更新" })).toBeDisabled();
   });
 });
