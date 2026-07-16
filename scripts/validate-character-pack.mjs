@@ -16,8 +16,81 @@ const index = [];
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_FRAMES_PER_ANIMATION = 240;
 const MAX_CANVAS_EDGE = 4096;
+const PUBLIC_CHARACTER_ROOT = path.resolve("public/characters");
+const isPublicCharacterRoot = root === PUBLIC_CHARACTER_ROOT;
+const assetRules = {
+  preview: { maxBytes: 8 * 1024 * 1024, minWidth: 64, minHeight: 64, maxWidth: 2048, maxHeight: 2048, square: false },
+  icon: { maxBytes: 2 * 1024 * 1024, minWidth: 32, minHeight: 32, maxWidth: 512, maxHeight: 512, square: true },
+};
 
 async function exists(file) { try { await readFile(file); return true; } catch { return false; } }
+
+async function hasNonEmptyText(file) {
+  try {
+    const fileStat = await stat(file);
+    return fileStat.isFile() && (await readFile(file, "utf8")).trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function optionalIndexValue(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+async function validateDisplayAsset(characterRoot, entryName, assetName, relative) {
+  if (relative === undefined) return null;
+  if (typeof relative !== "string" || !relative.trim()) {
+    errors.push(`${entryName}: ${assetName} 必须为角色目录内的非空相对路径`);
+    return null;
+  }
+  if (path.isAbsolute(relative) || relative.split(/[\\/]+/u).includes("..")) {
+    errors.push(`${entryName}: ${assetName} 路径越出角色目录`);
+    return null;
+  }
+  const assetPath = path.resolve(characterRoot, relative);
+  if (!assetPath.startsWith(`${characterRoot}${path.sep}`)) {
+    errors.push(`${entryName}: ${assetName} 路径越出角色目录`);
+    return null;
+  }
+  let assetStat;
+  let buffer;
+  try {
+    assetStat = await stat(assetPath);
+    if (!assetStat.isFile()) throw new Error("不是普通文件");
+    buffer = await readFile(assetPath);
+  } catch (error) {
+    errors.push(`${entryName}: ${assetName} 文件无法读取: ${relative} (${error.message})`);
+    return null;
+  }
+  const rules = assetRules[assetName];
+  if (assetStat.size > rules.maxBytes) {
+    errors.push(`${entryName}: ${assetName} 文件超过 ${rules.maxBytes / 1024 / 1024} MiB 上限`);
+    return null;
+  }
+  const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (buffer.length < 26 || !buffer.subarray(0, 8).equals(pngSignature)) {
+    errors.push(`${entryName}: ${assetName} 必须为有效 PNG 文件`);
+    return null;
+  }
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  if (width < rules.minWidth || height < rules.minHeight || width > rules.maxWidth || height > rules.maxHeight) {
+    errors.push(`${entryName}: ${assetName} 尺寸 ${width}x${height} 超出 ${rules.minWidth}x${rules.minHeight} 至 ${rules.maxWidth}x${rules.maxHeight} 范围`);
+    return null;
+  }
+  if (rules.square && width !== height) {
+    errors.push(`${entryName}: icon 必须为正方形 PNG，当前为 ${width}x${height}`);
+    return null;
+  }
+  try {
+    PNG.sync.read(buffer);
+  } catch (error) {
+    errors.push(`${entryName}: ${assetName} PNG 损坏: ${error.message}`);
+    return null;
+  }
+  return relative.replaceAll("\\", "/");
+}
 
 const characterEntries = (await readdir(root, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name, "en"));
 for (const entry of characterEntries) {
@@ -32,6 +105,16 @@ for (const entry of characterEntries) {
   if (!characterId.test(manifest.id ?? "")) errors.push(`${entry.name}: 角色 ID 只能使用小写英文、数字、下划线和连字符`);
   if (ids.has(manifest.id)) errors.push(`${entry.name}: 重复角色 ID ${manifest.id}`);
   ids.add(manifest.id);
+  if (typeof manifest.name !== "string" || !manifest.name.trim()) errors.push(`${entry.name}: name 必须为非空字符串`);
+  if (isPublicCharacterRoot && entry.name !== "_placeholder") {
+    for (const field of ["version", "author", "license"]) {
+      if (typeof manifest[field] !== "string" || !manifest[field].trim()) errors.push(`${entry.name}: 公开内置角色必须提供 ${field}`);
+    }
+    for (const metadataFile of ["metadata/source.md", "metadata/license.md"]) {
+      const metadataPath = path.join(characterRoot, ...metadataFile.split("/"));
+      if (!(await hasNonEmptyText(metadataPath))) errors.push(`${entry.name}: 公开内置角色必须提供非空的 ${metadataFile}`);
+    }
+  }
   if (!manifest.animations?.idle) errors.push(`${entry.name}: 缺少必需 idle 动画`);
   if (!Number.isFinite(manifest.defaultScale) || manifest.defaultScale <= 0 || manifest.defaultScale > 4) errors.push(`${entry.name}: defaultScale 必须为 0-4 范围内的正数`);
   if (!Number.isInteger(manifest.frameSize?.width) || !Number.isInteger(manifest.frameSize?.height) || manifest.frameSize.width < 16 || manifest.frameSize.height < 16 || manifest.frameSize.width > MAX_CANVAS_EDGE || manifest.frameSize.height > MAX_CANVAS_EDGE) errors.push(`${entry.name}: frameSize 必须为 16-${MAX_CANVAS_EDGE} 的整数`);
@@ -58,12 +141,8 @@ for (const entry of characterEntries) {
       }
     }
   }
-  for (const asset of ["preview", "icon"]) {
-    const relative = manifest[asset];
-    if (!relative) continue;
-    if (path.isAbsolute(relative) || relative.includes("..")) errors.push(`${entry.name}: ${asset} 路径越出角色目录`);
-    else if (!(await exists(path.resolve(characterRoot, relative)))) errors.push(`${entry.name}: ${asset} 文件不存在: ${relative}`);
-  }
+  const preview = await validateDisplayAsset(characterRoot, entry.name, "preview", manifest.preview);
+  const icon = await validateDisplayAsset(characterRoot, entry.name, "icon", manifest.icon);
   const frameIndex = { animations: {} };
   for (const [state, animation] of Object.entries(manifest.animations ?? {})) {
     if (!stateName.test(state)) { errors.push(`${entry.name}/${state}: 动作名无效`); continue; }
@@ -135,7 +214,16 @@ for (const entry of characterEntries) {
     if (reverseTarget && !manifest.animations?.[reverseTarget]) warnings.push(`${entry.name}/${state}: movement.reverseTo 指向缺失动作 ${reverseTarget}`);
   }
   await writeFile(path.join(characterRoot, "frames.json"), JSON.stringify(frameIndex, null, 2) + "\n");
-  index.push({ id: manifest.id, name: manifest.name, manifest: `/characters/${manifest.id}/manifest.json` });
+  index.push({
+    id: manifest.id,
+    name: manifest.name,
+    version: optionalIndexValue(manifest.version),
+    author: optionalIndexValue(manifest.author),
+    license: optionalIndexValue(manifest.license),
+    preview: preview ? `/characters/${manifest.id}/${preview}` : null,
+    icon: icon ? `/characters/${manifest.id}/${icon}` : null,
+    manifest: `/characters/${manifest.id}/manifest.json`,
+  });
   console.log(`✓ ${manifest.id}: ${Object.keys(frameIndex.animations).length} 个动作`);
 }
 

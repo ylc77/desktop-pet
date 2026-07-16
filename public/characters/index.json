@@ -1,9 +1,14 @@
 {
-  "generatedAt": "2026-07-15T19:34:33.101Z",
+  "generatedAt": "2026-07-16T08:21:05.350Z",
   "characters": [
     {
       "id": "_placeholder",
       "name": "开发占位角色",
+      "version": "0.1.0",
+      "author": "七酱桌宠",
+      "license": "Project placeholder only",
+      "preview": "/characters/_placeholder/preview.png",
+      "icon": "/characters/_placeholder/icon.png",
       "manifest": "/characters/_placeholder/manifest.json"
     }
   ]

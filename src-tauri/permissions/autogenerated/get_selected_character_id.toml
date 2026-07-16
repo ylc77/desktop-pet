@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-selected-character-id"
+description = "Enables the get_selected_character_id command without any pre-configured scope."
+commands.allow = ["get_selected_character_id"]
+
+[[permission]]
+identifier = "deny-get-selected-character-id"
+description = "Denies the get_selected_character_id command without any pre-configured scope."
+commands.deny = ["get_selected_character_id"]

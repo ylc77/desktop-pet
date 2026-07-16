@@ -12,6 +12,19 @@
     "core:window:allow-set-position",
     "core:window:allow-start-dragging",
     "autostart:default",
-    "log:default"
+    "log:default",
+    "allow-set-fullscreen-auto-hide",
+    "allow-quit-app",
+    "allow-read-settings-file",
+    "allow-write-settings-file",
+    "allow-quarantine-invalid-settings-file",
+    "allow-list-installed-characters",
+    "allow-load-installed-character",
+    "allow-set-active-character-id",
+    "allow-begin-character-activation",
+    "allow-commit-character-selection",
+    "allow-finalize-character-selection",
+    "allow-cancel-character-selection",
+    "allow-show-appearance-window"
   ]
 }

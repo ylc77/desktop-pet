@@ -19,6 +19,8 @@ export interface PrepareCharacterOptions {
   generation?: number;
   cacheSize?: number;
   cacheBudgetBytes?: number;
+  /** Startup recovery only. Explicit user selections must disable this. */
+  fallbackToPlaceholder?: boolean;
 }
 
 const PLACEHOLDER_ID = "_placeholder";
@@ -115,10 +117,9 @@ export function keepLoadedFrames(character: LoadedCharacter, loaded: ReadonlySet
   return { ...character, animations: animations as LoadedCharacter["animations"], warnings };
 }
 
-async function prepareUnchecked(id: string, options: PrepareCharacterOptions): Promise<PreparedCharacter> {
+export async function prepareLoadedCharacter(character: LoadedCharacter, options: PrepareCharacterOptions = {}): Promise<PreparedCharacter> {
   let cache: DecodedFrameCache | null = null;
   try {
-    const character = await loadCharacterUnchecked(id, options);
     const plan = getDecodedFrameCachePlan(character.manifest.frameSize, options.cacheSize ?? 320, options.cacheBudgetBytes);
     const preparedCache = new DecodedFrameCache(plan.maximumEntries);
     cache = preparedCache;
@@ -136,6 +137,10 @@ async function prepareUnchecked(id: string, options: PrepareCharacterOptions): P
   }
 }
 
+async function prepareUnchecked(id: string, options: PrepareCharacterOptions): Promise<PreparedCharacter> {
+  return prepareLoadedCharacter(await loadCharacterUnchecked(id, options), options);
+}
+
 export async function loadPreparedCharacter(id: string, options: PrepareCharacterOptions = {}): Promise<PreparedCharacter> {
   try {
     const prepared = await prepareUnchecked(id, options);
@@ -143,8 +148,8 @@ export async function loadPreparedCharacter(id: string, options: PrepareCharacte
     return prepared;
   } catch (error) {
     if (options.signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
-    log("error", `角色 ${id} 无法安全播放，回退到占位角色`, error);
-    if (id === PLACEHOLDER_ID) throw error;
+    if (id === PLACEHOLDER_ID || options.fallbackToPlaceholder === false) throw error;
+    log("error", `角色 ${id} 无法安全播放，启动时临时回退到占位角色`, error);
     return prepareUnchecked(PLACEHOLDER_ID, options);
   }
 }

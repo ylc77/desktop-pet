@@ -14,5 +14,6 @@ coverage/
 tmp/
 temp/
 release/
+character-packages/
 qa-results/
 qa-results-*/

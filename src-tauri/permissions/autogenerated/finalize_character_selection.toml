@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-finalize-character-selection"
+description = "Enables the finalize_character_selection command without any pre-configured scope."
+commands.allow = ["finalize_character_selection"]
+
+[[permission]]
+identifier = "deny-finalize-character-selection"
+description = "Denies the finalize_character_selection command without any pre-configured scope."
+commands.deny = ["finalize_character_selection"]

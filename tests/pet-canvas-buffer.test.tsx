@@ -17,6 +17,29 @@ describe("BufferedFrame", () => {
     expect(container.querySelector("img.active")?.getAttribute("src")).toBe("idle-2.png");
   });
 
+  it("reuses an already loaded slot when a two-frame loop returns to frame one", () => {
+    const { container, rerender } = render(<BufferedFrame source="idle-1.png" dropShadow={false} onError={vi.fn()} />);
+    fireEvent.load(imageFor(container, "idle-1.png"));
+    rerender(<BufferedFrame source="idle-2.png" dropShadow={false} onError={vi.fn()} />);
+    fireEvent.load(imageFor(container, "idle-2.png"));
+    expect(container.querySelector("img.active")?.getAttribute("src")).toBe("idle-2.png");
+
+    rerender(<BufferedFrame source="idle-1.png" dropShadow={false} onError={vi.fn()} />);
+    expect(container.querySelector("img.active")?.getAttribute("src")).toBe("idle-1.png");
+  });
+
+  it("cancels an unloaded candidate when animation returns to the active frame", () => {
+    const { container, rerender } = render(<BufferedFrame source="idle-1.png" dropShadow={false} onError={vi.fn()} />);
+    fireEvent.load(imageFor(container, "idle-1.png"));
+    rerender(<BufferedFrame source="idle-2.png" dropShadow={false} onError={vi.fn()} />);
+    const lateCandidate = imageFor(container, "idle-2.png");
+
+    rerender(<BufferedFrame source="idle-1.png" dropShadow={false} onError={vi.fn()} />);
+    fireEvent.load(lateCandidate);
+
+    expect(container.querySelector("img.active")?.getAttribute("src")).toBe("idle-1.png");
+  });
+
   it("ignores a late error from a superseded candidate", () => {
     const onError = vi.fn();
     const { container, rerender } = render(<BufferedFrame source="idle-1.png" dropShadow={false} onError={onError} />);

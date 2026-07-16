@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-fullscreen-auto-hide"
+description = "Enables the set_fullscreen_auto_hide command without any pre-configured scope."
+commands.allow = ["set_fullscreen_auto_hide"]
+
+[[permission]]
+identifier = "deny-set-fullscreen-auto-hide"
+description = "Denies the set_fullscreen_auto_hide command without any pre-configured scope."
+commands.deny = ["set_fullscreen_auto_hide"]

@@ -3,14 +3,13 @@ import type { AppSettings } from "../../core/settings/settingsSchema";
 interface Props {
   position: { x: number; y: number };
   settings: AppSettings;
-  characters: { id: string; name: string }[];
   developerToolsAllowed: boolean;
   onPatch: (patch: Partial<AppSettings>) => void;
-  onAction: (action: "reload" | "reset" | "hide" | "quit" | "settings" | "developer") => void;
+  onAction: (action: "reload" | "reset" | "hide" | "quit" | "settings" | "developer" | "appearance") => void;
   onClose: () => void;
 }
 
-export function ContextMenu({ position, settings, characters, developerToolsAllowed, onPatch, onAction, onClose }: Props) {
+export function ContextMenu({ position, settings, developerToolsAllowed, onPatch, onAction, onClose }: Props) {
   const viewportPadding = 8;
   const left = Math.max(viewportPadding, Math.min(position.x, window.innerWidth - 205 - viewportPadding));
   const top = Math.max(viewportPadding, Math.min(position.y, window.innerHeight - 390));
@@ -25,7 +24,7 @@ export function ContextMenu({ position, settings, characters, developerToolsAllo
         <button onClick={() => onPatch({ animationsPaused: !settings.animationsPaused })}>{settings.animationsPaused ? "继续动画" : "暂停动画"}</button>
         <label>大小 <input type="range" min="0.1" max="4" step="0.05" value={settings.scale} onChange={(e) => onPatch({ scale: e.currentTarget.valueAsNumber })} /></label>
         <label>透明度 <input type="range" min="0.2" max="1" step="0.05" value={settings.opacity} onChange={(e) => onPatch({ opacity: e.currentTarget.valueAsNumber })} /></label>
-        <label>角色 <select value={settings.characterId} onChange={(e) => onPatch({ characterId: e.currentTarget.value })}>{characters.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <button onClick={() => onAction("appearance")}>外观中心</button>
         <button onClick={() => onPatch({ alwaysOnTop: !settings.alwaysOnTop })}>{settings.alwaysOnTop ? "关闭置顶" : "开启置顶"}</button>
         <button onClick={() => onPatch({ autostart: !settings.autostart })}>{settings.autostart ? "关闭开机启动" : "开启开机启动"}</button>
         <button onClick={() => onPatch({ facing: settings.facing === "left" ? "right" : "left" })}>朝向：{settings.facing === "left" ? "左" : "右"}</button>

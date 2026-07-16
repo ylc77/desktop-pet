@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-quarantine-invalid-settings-file"
+description = "Enables the quarantine_invalid_settings_file command without any pre-configured scope."
+commands.allow = ["quarantine_invalid_settings_file"]
+
+[[permission]]
+identifier = "deny-quarantine-invalid-settings-file"
+description = "Denies the quarantine_invalid_settings_file command without any pre-configured scope."
+commands.deny = ["quarantine_invalid_settings_file"]

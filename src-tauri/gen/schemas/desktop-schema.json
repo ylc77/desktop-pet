@@ -177,6 +177,210 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the begin_character_activation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-begin-character-activation",
+          "markdownDescription": "Enables the begin_character_activation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_character_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-character-selection",
+          "markdownDescription": "Enables the cancel_character_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the commit_character_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-commit-character-selection",
+          "markdownDescription": "Enables the commit_character_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the finalize_character_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-finalize-character-selection",
+          "markdownDescription": "Enables the finalize_character_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_selected_character_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-selected-character-id",
+          "markdownDescription": "Enables the get_selected_character_id command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_character_package command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-character-package",
+          "markdownDescription": "Enables the import_character_package command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_installed_characters command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-installed-characters",
+          "markdownDescription": "Enables the list_installed_characters command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the load_installed_character command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-load-installed-character",
+          "markdownDescription": "Enables the load_installed_character command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the quarantine_invalid_settings_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-quarantine-invalid-settings-file",
+          "markdownDescription": "Enables the quarantine_invalid_settings_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the quit_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-quit-app",
+          "markdownDescription": "Enables the quit_app command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_settings_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-settings-file",
+          "markdownDescription": "Enables the read_settings_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_installed_character command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-installed-character",
+          "markdownDescription": "Enables the remove_installed_character command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_character_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-request-character-selection",
+          "markdownDescription": "Enables the request_character_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_active_character_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-active-character-id",
+          "markdownDescription": "Enables the set_active_character_id command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_fullscreen_auto_hide command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-fullscreen-auto-hide",
+          "markdownDescription": "Enables the set_fullscreen_auto_hide command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show_appearance_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-show-appearance-window",
+          "markdownDescription": "Enables the show_appearance_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the write_settings_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-write-settings-file",
+          "markdownDescription": "Enables the write_settings_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the begin_character_activation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-begin-character-activation",
+          "markdownDescription": "Denies the begin_character_activation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_character_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-character-selection",
+          "markdownDescription": "Denies the cancel_character_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the commit_character_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-commit-character-selection",
+          "markdownDescription": "Denies the commit_character_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the finalize_character_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-finalize-character-selection",
+          "markdownDescription": "Denies the finalize_character_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_selected_character_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-selected-character-id",
+          "markdownDescription": "Denies the get_selected_character_id command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_character_package command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-character-package",
+          "markdownDescription": "Denies the import_character_package command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_installed_characters command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-installed-characters",
+          "markdownDescription": "Denies the list_installed_characters command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the load_installed_character command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-load-installed-character",
+          "markdownDescription": "Denies the load_installed_character command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the quarantine_invalid_settings_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-quarantine-invalid-settings-file",
+          "markdownDescription": "Denies the quarantine_invalid_settings_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the quit_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-quit-app",
+          "markdownDescription": "Denies the quit_app command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_settings_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-settings-file",
+          "markdownDescription": "Denies the read_settings_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_installed_character command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-installed-character",
+          "markdownDescription": "Denies the remove_installed_character command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_character_selection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-request-character-selection",
+          "markdownDescription": "Denies the request_character_selection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_active_character_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-active-character-id",
+          "markdownDescription": "Denies the set_active_character_id command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_fullscreen_auto_hide command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-fullscreen-auto-hide",
+          "markdownDescription": "Denies the set_fullscreen_auto_hide command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show_appearance_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-show-appearance-window",
+          "markdownDescription": "Denies the show_appearance_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the write_settings_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-write-settings-file",
+          "markdownDescription": "Denies the write_settings_file command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures if your\napplication can enable or disable auto\nstarting the application on boot.\n\n#### Granted Permissions\n\nIt allows all to check, enable and\ndisable the automatic start on boot.\n\n\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`\n- `allow-is-enabled`",
           "type": "string",
           "const": "autostart:default",
@@ -2233,6 +2437,72 @@
           "type": "string",
           "const": "core:window:deny-unminimize",
           "markdownDescription": "Denies the unminimize command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures the types of dialogs\navailable from the dialog plugin.\n\n#### Granted Permissions\n\nAll dialog types are enabled.\n\n\n\n#### This default permission set includes:\n\n- `allow-message`\n- `allow-save`\n- `allow-open`",
+          "type": "string",
+          "const": "dialog:default",
+          "markdownDescription": "This permission set configures the types of dialogs\navailable from the dialog plugin.\n\n#### Granted Permissions\n\nAll dialog types are enabled.\n\n\n\n#### This default permission set includes:\n\n- `allow-message`\n- `allow-save`\n- `allow-open`"
+        },
+        {
+          "description": "Enables the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:allow-ask",
+          "markdownDescription": "Enables the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)"
+        },
+        {
+          "description": "Enables the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:allow-confirm",
+          "markdownDescription": "Enables the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `allow-message` and will be removed in v3)"
+        },
+        {
+          "description": "Enables the message command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-message",
+          "markdownDescription": "Enables the message command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-open",
+          "markdownDescription": "Enables the open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:allow-save",
+          "markdownDescription": "Enables the save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:deny-ask",
+          "markdownDescription": "Denies the ask command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)"
+        },
+        {
+          "description": "Denies the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)",
+          "type": "string",
+          "const": "dialog:deny-confirm",
+          "markdownDescription": "Denies the confirm command without any pre-configured scope. (**DEPRECATED**: This is now an alias to `deny-message` and will be removed in v3)"
+        },
+        {
+          "description": "Denies the message command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-message",
+          "markdownDescription": "Denies the message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-open",
+          "markdownDescription": "Denies the open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save command without any pre-configured scope.",
+          "type": "string",
+          "const": "dialog:deny-save",
+          "markdownDescription": "Denies the save command without any pre-configured scope."
         },
         {
           "description": "Allows the log command\n#### This default permission set includes:\n\n- `allow-log`",

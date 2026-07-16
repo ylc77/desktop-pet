@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-request-character-selection"
+description = "Enables the request_character_selection command without any pre-configured scope."
+commands.allow = ["request_character_selection"]
+
+[[permission]]
+identifier = "deny-request-character-selection"
+description = "Denies the request_character_selection command without any pre-configured scope."
+commands.deny = ["request_character_selection"]

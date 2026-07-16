@@ -29,13 +29,20 @@ interface FrameLayers { sources: [string, string]; active: 0 | 1; pending: 0 | 1
 export function BufferedFrame({ source, dropShadow, onError }: { source: string; dropShadow: boolean; onError: () => void }) {
   const [layers, setLayers] = useState<FrameLayers>({ sources: [source, source], active: 0, pending: null });
   const layersRef = useRef(layers);
+  const loadedRef = useRef<[boolean, boolean]>([false, false]);
   layersRef.current = layers;
   useEffect(() => {
     setLayers((current) => {
-      if (current.sources[current.active] === source) return current;
+      if (current.sources[current.active] === source) {
+        return current.pending === null ? current : { ...current, pending: null };
+      }
       const pending = (current.active === 0 ? 1 : 0) as 0 | 1;
+      if (current.sources[pending] === source && loadedRef.current[pending]) {
+        return { ...current, active: pending, pending: null };
+      }
       const sources: [string, string] = [...current.sources] as [string, string];
       sources[pending] = source;
+      loadedRef.current[pending] = false;
       return { ...current, sources, pending };
     });
   }, [source]);
@@ -49,7 +56,9 @@ export function BufferedFrame({ source, dropShadow, onError }: { source: string;
       aria-hidden="true"
       onLoad={() => {
         const current = layersRef.current;
-        if (current.pending !== index || current.sources[index] !== frameSource) return;
+        if (current.sources[index] !== frameSource) return;
+        loadedRef.current[index as 0 | 1] = true;
+        if (current.pending !== index) return;
         const next = { ...current, active: index as 0 | 1, pending: null };
         layersRef.current = next;
         setLayers(next);
@@ -57,6 +66,7 @@ export function BufferedFrame({ source, dropShadow, onError }: { source: string;
       onError={() => {
         const current = layersRef.current;
         if (current.pending !== index || current.sources[index] !== frameSource) return;
+        loadedRef.current[index as 0 | 1] = false;
         const next = { ...current, pending: null };
         layersRef.current = next;
         setLayers(next);

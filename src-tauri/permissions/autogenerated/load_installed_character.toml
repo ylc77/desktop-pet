@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-load-installed-character"
+description = "Enables the load_installed_character command without any pre-configured scope."
+commands.allow = ["load_installed_character"]
+
+[[permission]]
+identifier = "deny-load-installed-character"
+description = "Denies the load_installed_character command without any pre-configured scope."
+commands.deny = ["load_installed_character"]

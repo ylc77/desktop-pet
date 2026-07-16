@@ -1,3 +1,5 @@
+mod character_catalog;
+
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -1025,6 +1027,11 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                     show_main(app, VisibilityReason::TrayReset);
                 }
             }
+            "character" => {
+                if let Err(error) = character_catalog::show_appearance_window_for(app) {
+                    log::warn!("cannot open appearance center: {error}");
+                }
+            }
             action => {
                 let _ = app.emit("tray-action", action);
             }
@@ -1052,12 +1059,26 @@ pub fn run() {
     tauri::Builder::default()
         .manage(fullscreen_monitor.clone())
         .manage(SettingsFileLock::default())
+        .manage(character_catalog::CharacterCatalogLock::default())
+        .manage(character_catalog::ActiveCharacterState::default())
         .invoke_handler(tauri::generate_handler![
             set_fullscreen_auto_hide,
             quit_app,
             read_settings_file,
             write_settings_file,
-            quarantine_invalid_settings_file
+            quarantine_invalid_settings_file,
+            character_catalog::list_installed_characters,
+            character_catalog::load_installed_character,
+            character_catalog::import_character_package,
+            character_catalog::remove_installed_character,
+            character_catalog::get_selected_character_id,
+            character_catalog::set_active_character_id,
+            character_catalog::begin_character_activation,
+            character_catalog::commit_character_selection,
+            character_catalog::finalize_character_selection,
+            character_catalog::cancel_character_selection,
+            character_catalog::request_character_selection,
+            character_catalog::show_appearance_window
         ])
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app, VisibilityReason::SingleInstance)
@@ -1069,6 +1090,7 @@ pub fn run() {
                 .rotation_strategy(RotationStrategy::KeepSome(5))
                 .build(),
         )
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,

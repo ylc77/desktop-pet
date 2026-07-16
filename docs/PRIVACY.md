@@ -8,6 +8,7 @@
 - 当目标电脑缺少 Microsoft Edge WebView2 Runtime 时，NSIS 的 `downloadBootstrapper` 会访问 Microsoft 的下载服务；这是当前安装流程唯一可能需要的网络活动。
 - 设置保存在 `%APPDATA%\dev.deskpet.framework\`。
 - 日志保存在 `%LOCALAPPDATA%\dev.deskpet.framework\logs\`，单文件最多 1 MiB，最多保留 5 个轮转文件。
-- 卸载默认保留设置和日志，避免未经用户许可删除本地数据。彻底清除只能由用户明确操作这两个应用专属目录。
+- 用户从外观中心导入的 `.qipet` 只在本机解包到 `%LOCALAPPDATA%\dev.deskpet.framework\characters\`；应用不上传角色包、参考照片、肖像或授权文档。导入不等于取得第三方角色、商标、照片或肖像的公开使用权。
+- 卸载默认保留设置、日志和本地角色，避免未经用户许可删除本地数据。彻底清除只能由用户明确操作这两个应用专属目录。
 
 当前没有在线隐私请求或客服系统。公开测试人员应在提交日志前自行检查并仅交给项目维护者；不要公开包含用户名或本地路径的原始日志。
