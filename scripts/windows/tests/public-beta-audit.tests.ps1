@@ -28,14 +28,14 @@ try {
     [System.IO.Directory]::CreateDirectory($root) | Out-Null
     & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
     $emptyAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
-    Add-Test 'Missing updater configuration blocks public beta gate' 'BLOCKED' $emptyAudit.gate
-    Add-Test 'Updater status is explicitly NOT_CONFIGURED' 'NOT_CONFIGURED' $emptyAudit.updaterStatus
+    Add-Test 'Configured updater remains blocked without production public-key verification' 'BLOCKED' $emptyAudit.gate
+    Add-Test 'Updater status is explicitly READY' 'READY' $emptyAudit.updaterStatus
     $automaticRequirement = @($emptyAudit.requirements | Where-Object id -eq 'automatic-release')[0]
     Add-Test 'Missing environment evidence is not passed' 'not_executed' ([string]$automaticRequirement.status)
 
     & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery -AcceptUnsignedRisk
     $acceptedRiskAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
-    Add-Test 'AcceptUnsignedRisk cannot bypass a missing updater' 'BLOCKED' $acceptedRiskAudit.gate
+    Add-Test 'AcceptUnsignedRisk cannot bypass missing updater key verification' 'BLOCKED' $acceptedRiskAudit.gate
 
     $directOverlayEnvironment = [ordered]@{
         schemaVersion=1; environmentId='direct-overlay'; status='passed'; testedAtUtc=[DateTime]::UtcNow.ToString('o'); gitCommit=(& git -C $repo rev-parse HEAD).Trim()
@@ -103,7 +103,7 @@ try {
     $environment | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath ([System.IO.Path]::Combine($environmentDirectory, 'environment-result.json')) -Encoding UTF8
     & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
     $completeAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
-    Add-Test 'Complete evidence remains blocked without updater configuration' 'BLOCKED' $completeAudit.gate
+    Add-Test 'Complete evidence remains blocked without updater key verification' 'BLOCKED' $completeAudit.gate
     Add-Test 'Matching commit, version and hash evidence is accepted' $true ([bool]$completeAudit.environmentResults[0].evidenceValid)
     $applicationUpdaterRequirement = @($completeAudit.requirements | Where-Object id -eq 'application-updater-e2e')[0]
     Add-Test 'Explicit passed application updater report satisfies its independent requirement' 'passed' ([string]$applicationUpdaterRequirement.status)
@@ -130,7 +130,7 @@ try {
     $environment | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ([System.IO.Path]::Combine($environmentDirectory, 'environment-result.json')) -Encoding UTF8
     & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
     $failedAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
-    Add-Test 'Updater block is not bypassed by other failed evidence' 'BLOCKED' $failedAudit.gate
+    Add-Test 'Updater key-verification block is not bypassed by other failed evidence' 'BLOCKED' $failedAudit.gate
 
     $staleEnvironment = [pscustomobject]@{
         gitCommit='0000000000000000000000000000000000000000'; expectedVersion=[string]$releaseManifest.version

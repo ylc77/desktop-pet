@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..', '..'))
 $updaterTools = [System.IO.Path]::Combine($repositoryRoot, 'scripts', 'updater')
 . ([System.IO.Path]::Combine($updaterTools, 'common.ps1'))
+$configuredApplicationVersion = [string]((Get-Content -LiteralPath ([System.IO.Path]::Combine($repositoryRoot, 'src-tauri', 'tauri.conf.json')) -Raw -Encoding UTF8 | ConvertFrom-Json).version)
 
 $results = @()
 function Add-TestResult([string]$Name, [bool]$Passed, [string]$Details) {
@@ -659,7 +660,7 @@ try {
     $previousRuntimeEndpoint = [Environment]::GetEnvironmentVariable('QIJIANG_UPDATER_ENDPOINT', 'Process')
     $previousRuntimePublicKey = [Environment]::GetEnvironmentVariable('QIJIANG_UPDATER_PUBLIC_KEY', 'Process')
     $previousRuntimeChannel = [Environment]::GetEnvironmentVariable('QIJIANG_UPDATER_CHANNEL', 'Process')
-    $buildPlan = & ([System.IO.Path]::Combine($updaterTools, 'build-signed-update.ps1')) -Version '0.1.0' `
+    $buildPlan = & ([System.IO.Path]::Combine($updaterTools, 'build-signed-update.ps1')) -Version $configuredApplicationVersion `
         -EndpointBaseUrl 'https://updates.qijiang-desktop-pet.com/qijiang/' -PrivateKeyPath $previewKeyPath `
         -OutputDirectory ([System.IO.Path]::Combine($temporaryRoot, 'signed build preview')) -Execute -WhatIf
     Test-Equal 'Signed build defaults to preview mode' 'PreviewOnly' ([string]$buildPlan.Mode)
