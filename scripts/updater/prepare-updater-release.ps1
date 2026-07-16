@@ -40,9 +40,8 @@ if (-not $endpointUri.AbsolutePath.EndsWith('.json', [StringComparison]::Ordinal
     throw 'Updater endpoint must identify an HTTPS JSON metadata document.'
 }
 Assert-UpdaterSignatureBinding -ArtifactPath $artifact -SignaturePath $signatureFile
-$signature = Get-UpdaterSignatureText -SignaturePath $signatureFile
-$publicKeyFingerprint = Get-UpdaterPublicKeyFingerprint -LiteralPath $publicKey
-$artifactSize = (Get-Item -LiteralPath $artifact).Length
+$publicKeyText = Get-UpdaterPublicKeyText -LiteralPath $publicKey
+$publicKeyFingerprint = Get-UpdaterPublicKeyTextFingerprint -PublicKeyText $publicKeyText
 $gitState = Get-UpdaterGitState
 
 $updaterRoot = [System.IO.Path]::Combine($releaseRoot, 'updater')
@@ -90,25 +89,35 @@ $plan = [pscustomobject]@{
 if (-not $PSCmdlet.ShouldProcess([System.IO.Path]::Combine('release', 'updater', $Version), 'Prepare immutable updater release and advance latest.json')) {
     return $plan
 }
-if (-not (Test-UpdaterArtifactSignature -ArtifactPath $artifact -SignaturePath $signatureFile -PublicKeyPath $publicKey)) {
-    throw 'Updater artifact signature verification failed.'
-}
-
 $artifactName = [System.IO.Path]::GetFileName($artifact)
 $signatureName = [System.IO.Path]::GetFileName($signatureFile)
-$document = New-UpdaterLatestDocument -Version $Version -CurrentVersion $CurrentVersion -DownloadUrl $download `
-    -Signature $signature -Platform $Platform -PublishedAtUtc $PublishedAtUtc -ArtifactSizeBytes $artifactSize -Notes $Notes
-$createdVersionDirectory = $false
+$stagingDirectory = $null
+$publishedVersionDirectory = $false
+$pointerCleanupPending = $false
 try {
-    [void][System.IO.Directory]::CreateDirectory($versionDirectory)
-    $createdVersionDirectory = $true
-    $artifactDestination = [System.IO.Path]::Combine($versionDirectory, $artifactName)
-    $signatureDestination = [System.IO.Path]::Combine($versionDirectory, $signatureName)
-    $latestDestination = [System.IO.Path]::Combine($versionDirectory, 'latest.json')
+    [void][System.IO.Directory]::CreateDirectory($updaterRoot)
+    $stagingDirectory = [System.IO.Path]::Combine($updaterRoot, '.' + $Version + '.staging-' + [Guid]::NewGuid().ToString('N'))
+    [void][System.IO.Directory]::CreateDirectory($stagingDirectory)
+    $artifactDestination = [System.IO.Path]::Combine($stagingDirectory, $artifactName)
+    $signatureDestination = [System.IO.Path]::Combine($stagingDirectory, $signatureName)
+    $latestDestination = [System.IO.Path]::Combine($stagingDirectory, 'latest.json')
+    $publicKeySnapshot = [System.IO.Path]::Combine($stagingDirectory, '.updater-public-key.snapshot')
+    [void](Write-UpdaterPublicKeySnapshot -PublicKeyText $publicKeyText -LiteralPath $publicKeySnapshot)
     [System.IO.File]::Copy($artifact, $artifactDestination, $false)
     [System.IO.File]::Copy($signatureFile, $signatureDestination, $false)
+    Assert-UpdaterSignatureBinding -ArtifactPath $artifactDestination -SignaturePath $signatureDestination
+    $signature = Get-UpdaterSignatureText -SignaturePath $signatureDestination
+    $artifactSize = (Get-Item -LiteralPath $artifactDestination).Length
+    if (-not (Test-UpdaterArtifactSignature -ArtifactPath $artifactDestination -SignaturePath $signatureDestination -PublicKeyPath $publicKeySnapshot)) {
+        throw 'Copied updater artifact signature verification failed.'
+    }
+    [System.IO.File]::Delete($publicKeySnapshot)
+    $document = New-UpdaterLatestDocument -Version $Version -CurrentVersion $CurrentVersion -DownloadUrl $download `
+        -Signature $signature -Platform $Platform -PublishedAtUtc $PublishedAtUtc -ArtifactSizeBytes $artifactSize -Notes $Notes
     Write-Utf8NoBomJson -InputObject $document -LiteralPath $latestDestination
     [void](Test-UpdaterLatestDocument -LatestJsonPath $latestDestination -CurrentVersion $CurrentVersion -ExpectedVersion $Version -ExpectedPlatform $Platform -ExpectedArtifactSizeBytes $artifactSize)
+
+    $verifiedGitState = Assert-UpdaterGitStateUnchanged -InitialState $gitState
 
     $manifest = [ordered]@{
         schemaVersion = 1
@@ -129,30 +138,31 @@ try {
         endpoint = $endpointUrl
         installMode = 'passive'
         preparedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
-        gitCommit = $gitState.Commit
-        dirtyWorktree = $gitState.DirtyWorktree
+        gitCommit = $verifiedGitState.Commit
+        dirtyWorktree = $verifiedGitState.DirtyWorktree
         cryptographicSignatureVerified = $true
     }
-    $manifestPath = [System.IO.Path]::Combine($versionDirectory, 'updater-release-manifest.json')
+    $manifestPath = [System.IO.Path]::Combine($stagingDirectory, 'updater-release-manifest.json')
     Write-Utf8NoBomJson -InputObject $manifest -LiteralPath $manifestPath
     $checksumLines = @(
         "$($manifest.artifactSha256)  $artifactName",
         "$($manifest.signatureSha256)  $signatureName",
         "$($manifest.latestJsonSha256)  latest.json"
     )
-    [System.IO.File]::WriteAllLines([System.IO.Path]::Combine($versionDirectory, 'SHA256SUMS.txt'), $checksumLines, $script:Utf8NoBom)
+    [System.IO.File]::WriteAllLines([System.IO.Path]::Combine($stagingDirectory, 'SHA256SUMS.txt'), $checksumLines, $script:Utf8NoBom)
 
-    [void][System.IO.Directory]::CreateDirectory($updaterRoot)
-    $temporaryLatest = [System.IO.Path]::Combine($updaterRoot, '.latest-' + [Guid]::NewGuid().ToString('N') + '.tmp')
-    try {
-        [System.IO.File]::Copy($latestDestination, $temporaryLatest, $false)
-        [System.IO.File]::Copy($temporaryLatest, $topLevelLatestPath, $true)
-    } finally {
-        if ([System.IO.File]::Exists($temporaryLatest)) { [System.IO.File]::Delete($temporaryLatest) }
+    if ([System.IO.Directory]::Exists($versionDirectory) -or [System.IO.File]::Exists($versionDirectory)) {
+        throw "Refusing to publish over an updater version path that appeared during preparation: $Version"
     }
+    [void](Assert-UpdaterGitStateUnchanged -InitialState $gitState)
+    [System.IO.Directory]::Move($stagingDirectory, $versionDirectory)
+    $publishedVersionDirectory = $true
+    $publishedLatestDestination = [System.IO.Path]::Combine($versionDirectory, 'latest.json')
+    $pointerPublishResult = Publish-UpdaterFileAtomically -SourcePath $publishedLatestDestination -DestinationPath $topLevelLatestPath
+    $pointerCleanupPending = [bool]$pointerPublishResult.CleanupPending
 } catch {
-    if ($createdVersionDirectory -and [System.IO.Directory]::Exists($versionDirectory)) {
-        [System.IO.Directory]::Delete($versionDirectory, $true)
+    if (-not $publishedVersionDirectory -and $null -ne $stagingDirectory -and [System.IO.Directory]::Exists($stagingDirectory)) {
+        [System.IO.Directory]::Delete($stagingDirectory, $true)
     }
     throw
 }
@@ -168,4 +178,5 @@ try {
     Endpoint = $endpointUrl
     InstallMode = 'passive'
     CryptographicSignatureVerified = $true
+    PointerCleanupPending = $pointerCleanupPending
 }

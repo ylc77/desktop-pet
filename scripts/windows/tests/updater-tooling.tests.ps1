@@ -62,6 +62,15 @@ try {
         (Invoke-UpdaterToolProcess -FilePath $env:ComSpec -ArgumentList @('/d','/c','exit','0') -TimeoutSeconds 10)
 
     $tauriCli = [System.IO.Path]::Combine($repositoryRoot, 'node_modules', '.bin', 'tauri.cmd')
+    $batchFixture = [System.IO.Path]::Combine($temporaryRoot, (-join @([char]0x4E03,[char]0x9171,' safe tool.cmd')))
+    [System.IO.File]::WriteAllText($batchFixture, "@exit /b 0`r`n", [System.Text.Encoding]::ASCII)
+    Test-Equal 'Batch helper supports Unicode, spaces, and ordinary path arguments' 0 `
+        (Invoke-UpdaterToolProcess -FilePath $batchFixture -ArgumentList @((-join @([char]0x4E2D,[char]0x6587,' safe path'))))
+    foreach ($metacharacter in @('&','|','<','>','^','(',')','%','!')) {
+        Test-Throws "Batch helper rejects cmd metacharacter $metacharacter" {
+            Invoke-UpdaterToolProcess -FilePath $batchFixture -ArgumentList @('unsafe' + $metacharacter + 'argument')
+        } 'must not contain cmd.exe metacharacters'
+    }
     $temporarySigningPassword = [Guid]::NewGuid().ToString('N')
     $temporaryKeyOne = [System.IO.Path]::Combine($temporaryRoot, 'temporary-one.key')
     $temporaryKeyTwo = [System.IO.Path]::Combine($temporaryRoot, 'temporary-two.key')
@@ -76,6 +85,17 @@ try {
     $artifactSignExit = Invoke-TemporaryTauriSigningCommand -TauriCli $tauriCli -ArgumentList @('signer','sign','--private-key-path',$temporaryKeyOne,$artifactPath) -Password $temporarySigningPassword
     Test-Equal 'Temporary integration key signs the versioned artifact' 0 $artifactSignExit
     $signature = Get-UpdaterSignatureText -SignaturePath $signaturePath
+    $snapshotSourcePublicKey = [System.IO.Path]::Combine($temporaryRoot, 'snapshot-source.key.pub')
+    $snapshotPublicKey = [System.IO.Path]::Combine($temporaryRoot, 'snapshot.key.pub')
+    [System.IO.File]::Copy($publicKeyPath, $snapshotSourcePublicKey, $false)
+    $snapshotPublicKeyText = Get-UpdaterPublicKeyText -LiteralPath $snapshotSourcePublicKey
+    $snapshotFingerprint = Get-UpdaterPublicKeyTextFingerprint -PublicKeyText $snapshotPublicKeyText
+    [void](Write-UpdaterPublicKeySnapshot -PublicKeyText $snapshotPublicKeyText -LiteralPath $snapshotPublicKey)
+    [System.IO.File]::Copy(($temporaryKeyTwo + '.pub'), $snapshotSourcePublicKey, $true)
+    Test-Equal 'Public-key snapshot fingerprint survives replacement of the external source path' $snapshotFingerprint `
+        (Get-UpdaterPublicKeyFingerprint -LiteralPath $snapshotPublicKey)
+    Test-Equal 'Public-key snapshot still verifies the artifact after external source replacement' $true `
+        (Test-UpdaterArtifactSignature -ArtifactPath $artifactPath -SignaturePath $signaturePath -PublicKeyPath $snapshotPublicKey)
     $artifactDownloadUrl = 'https://updates.qijiang-desktop-pet.com/files/' + [Uri]::EscapeDataString([System.IO.Path]::GetFileName($artifactPath))
     $latestPath = [System.IO.Path]::Combine($temporaryRoot, 'latest.json')
     $createScript = [System.IO.Path]::Combine($updaterTools, 'create-latest-json.ps1')
@@ -91,6 +111,33 @@ try {
     Test-Equal 'latest.json embeds actual signature file text' $signature ([string]$latest.platforms.'windows-x86_64'.signature)
     Test-Equal 'latest.json records the exact artifact size' (Get-Item -LiteralPath $artifactPath).Length ([long]$latest.platforms.'windows-x86_64'.size)
     Test-Equal 'latest.json preserves Unicode release notes' (-join @([char]0x516C,[char]0x5F00,[char]0x6D4B,[char]0x8BD5)) ([string]$latest.notes)
+    $invalidSizeLatestPath = [System.IO.Path]::Combine($temporaryRoot, 'invalid-string-size.json')
+    $invalidSizeDocument = [ordered]@{
+        version='0.2.0-beta.1'; notes=''; pub_date=[DateTimeOffset]::UtcNow.ToString('o');
+        platforms=[ordered]@{ 'windows-x86_64'=[ordered]@{ signature=$signature; url='https://updates.qijiang-desktop-pet.com/files/qijiang.exe'; size='9' } }
+    }
+    [System.IO.File]::WriteAllText($invalidSizeLatestPath, ($invalidSizeDocument | ConvertTo-Json -Depth 6), $utf8NoBom)
+    Test-Throws 'latest.json rejects a string artifact size' {
+        Test-UpdaterLatestDocument -LatestJsonPath $invalidSizeLatestPath -CurrentVersion '0.1.0'
+    } 'invalid artifact size'
+    $extraPropertyLatestPath = [System.IO.Path]::Combine($temporaryRoot, 'invalid-extra-property.json')
+    $extraPropertyDocument = [ordered]@{
+        version='0.2.0-beta.1'; notes=''; pub_date=[DateTimeOffset]::UtcNow.ToString('o'); unexpected='blocked';
+        platforms=[ordered]@{ 'windows-x86_64'=[ordered]@{ signature=$signature; url='https://updates.qijiang-desktop-pet.com/files/qijiang.exe'; size=9 } }
+    }
+    [System.IO.File]::WriteAllText($extraPropertyLatestPath, ($extraPropertyDocument | ConvertTo-Json -Depth 6), $utf8NoBom)
+    Test-Throws 'latest.json rejects unknown top-level properties' {
+        Test-UpdaterLatestDocument -LatestJsonPath $extraPropertyLatestPath -CurrentVersion '0.1.0'
+    } 'must contain exactly'
+    $invalidDateLatestPath = [System.IO.Path]::Combine($temporaryRoot, 'invalid-date.json')
+    $invalidDateDocument = [ordered]@{
+        version='0.2.0-beta.1'; notes=''; pub_date='2026/07/16';
+        platforms=[ordered]@{ 'windows-x86_64'=[ordered]@{ signature=$signature; url='https://updates.qijiang-desktop-pet.com/files/qijiang.exe'; size=9 } }
+    }
+    [System.IO.File]::WriteAllText($invalidDateLatestPath, ($invalidDateDocument | ConvertTo-Json -Depth 6), $utf8NoBom)
+    Test-Throws 'latest.json rejects non-RFC3339 publication times' {
+        Test-UpdaterLatestDocument -LatestJsonPath $invalidDateLatestPath -CurrentVersion '0.1.0'
+    } 'RFC3339'
     Test-NoThrow 'latest.json validates under the previous version' {
         & ([System.IO.Path]::Combine($updaterTools, 'validate-latest-json.ps1')) -LatestJsonPath $latestPath -CurrentVersion '0.1.0' -ExpectedVersion '0.2.0-beta.1' `
             -ArtifactPath $artifactPath -SignaturePath $signaturePath -PublicKeyPath $publicKeyPath
@@ -103,6 +150,11 @@ try {
         New-UpdaterLatestDocument -Version '0.2.0' -CurrentVersion '0.1.0' -DownloadUrl 'http://updates.qijiang-desktop-pet.com/file.exe' `
             -Signature $signature -Platform 'windows-x86_64' -PublishedAtUtc ([DateTimeOffset]::UtcNow.ToString('o')) -ArtifactSizeBytes 1
     } 'must use HTTPS'
+    $sensitiveHttpUrl = 'http://updates.qijiang-desktop-pet.com/file.exe?' + (-join @('to','ken=must-not-echo'))
+    $sensitiveHttpError = ''
+    try { Assert-UpdaterHttpsUrl -Url $sensitiveHttpUrl | Out-Null } catch { $sensitiveHttpError = [string]$_.Exception.Message }
+    Test-True 'Rejected HTTP updater URLs return a safe error' (-not [string]::IsNullOrWhiteSpace($sensitiveHttpError)) 'An error is required.'
+    Test-Equal 'Rejected HTTP updater URLs do not echo credentials' $false ([bool]$sensitiveHttpError.Contains('must-not-echo'))
     Test-Throws 'Token-bearing updater URLs are rejected' {
         Assert-UpdaterHttpsUrl -Url 'https://updates.qijiang-desktop-pet.com/file.exe?token=unsafe'
     } 'must not contain'
@@ -616,6 +668,96 @@ try {
     Test-Equal 'Signed build preview preserves runtime endpoint environment' $previousRuntimeEndpoint ([Environment]::GetEnvironmentVariable('QIJIANG_UPDATER_ENDPOINT', 'Process'))
     Test-Equal 'Signed build preview preserves runtime public-key environment' $previousRuntimePublicKey ([Environment]::GetEnvironmentVariable('QIJIANG_UPDATER_PUBLIC_KEY', 'Process'))
     Test-Equal 'Signed build preview preserves runtime channel environment' $previousRuntimeChannel ([Environment]::GetEnvironmentVariable('QIJIANG_UPDATER_CHANNEL', 'Process'))
+    $signedBuildScriptText = Get-Content -LiteralPath ([System.IO.Path]::Combine($updaterTools, 'build-signed-update.ps1')) -Raw -Encoding UTF8
+    Test-True 'Signed build uses an isolated Cargo target directory' `
+        ([bool]($signedBuildScriptText -match "SetEnvironmentVariable\('CARGO_TARGET_DIR'" -and $signedBuildScriptText -match 'isolatedTargetDirectory')) `
+        'Each signed build must bind artifacts from a fresh target directory.'
+    Test-True 'Signed build requires the exact product, version, and architecture filename' `
+        ([bool]($signedBuildScriptText -match '(?s)Get-ExactUpdaterInstallerArtifact.*productName.*Version')) `
+        'A newest-file heuristic must not bind a stale artifact to HEAD.'
+    Test-True 'Signed build verifies the copied destination artifact' `
+        ([bool]($signedBuildScriptText -match 'Test-UpdaterArtifactSignature\s+-ArtifactPath\s+\$artifactDestination')) `
+        'The final copied bytes are the bytes recorded in the manifest.'
+    Test-True 'Signed build publishes only by moving its unique staging directory' `
+        ([bool]($signedBuildScriptText -match '\.staging-' -and $signedBuildScriptText -match '\[System\.IO\.Directory\]::Move\(\$stagedOutput, \$output\)' -and $signedBuildScriptText -notmatch 'Directory\]::Delete\(\$output')) `
+        'A colliding user output directory is never recursively deleted.'
+    $prepareScriptText = Get-Content -LiteralPath ([System.IO.Path]::Combine($updaterTools, 'prepare-updater-release.ps1')) -Raw -Encoding UTF8
+    Test-True 'Release preparation publishes a fully verified unique staging directory atomically' `
+        ([bool]($prepareScriptText -match '\.staging-' -and $prepareScriptText -match 'Directory\]::Move\(\$stagingDirectory, \$versionDirectory\)' -and $prepareScriptText -match '\$publishedVersionDirectory')) `
+        'Failure cleanup is gated by ownership established by the successful move.'
+    $prepareCopyIndex = $prepareScriptText.IndexOf('[System.IO.File]::Copy($artifact, $artifactDestination')
+    $prepareDestinationSignatureIndex = $prepareScriptText.IndexOf('Get-UpdaterSignatureText -SignaturePath $signatureDestination')
+    $prepareDocumentIndex = $prepareScriptText.IndexOf('$document = New-UpdaterLatestDocument')
+    Test-True 'Release metadata is derived only from the copied staging artifact and signature' `
+        ($prepareCopyIndex -ge 0 -and $prepareDestinationSignatureIndex -gt $prepareCopyIndex -and $prepareDocumentIndex -gt $prepareDestinationSignatureIndex -and `
+         $prepareScriptText -notmatch 'Get-UpdaterSignatureText\s+-SignaturePath\s+\$signatureFile') `
+        'Source files must not be pre-read into metadata before the immutable staging copy exists.'
+    Test-True 'Release preparation rechecks Git state before metadata publication' `
+        ([regex]::Matches($prepareScriptText, 'Assert-UpdaterGitStateUnchanged').Count -ge 2) `
+        'Both manifest creation and atomic publication must remain bound to one Git snapshot.'
+    Test-True 'Signed updater builds recheck a clean Git snapshot before atomic publication' `
+        ([regex]::Matches($signedBuildScriptText, 'Assert-UpdaterGitStateUnchanged').Count -ge 2 -and `
+         $signedBuildScriptText -match 'Assert-UpdaterGitStateUnchanged\s+-InitialState\s+\$gitState\s+-RequireClean') `
+        'Long signed builds must not publish after HEAD or worktree drift.'
+    Test-True 'Release preparation uses one immutable public-key snapshot for fingerprint and verification' `
+        ([bool]($prepareScriptText -match 'Get-UpdaterPublicKeyTextFingerprint\s+-PublicKeyText\s+\$publicKeyText' -and `
+                 $prepareScriptText -match 'Test-UpdaterArtifactSignature(?s).*?-PublicKeyPath\s+\$publicKeySnapshot')) `
+        'External public-key replacement must not split fingerprint and cryptographic verification.'
+    Test-True 'Signed build reuses one public-key snapshot and rechecks private-key bytes' `
+        ([bool]($signedBuildScriptText -match 'Write-UpdaterPublicKeySnapshot' -and `
+                 $signedBuildScriptText -match 'Test-UpdaterArtifactSignature(?s).*?-PublicKeyPath\s+\$publicKeySnapshot' -and `
+                 [regex]::Matches($signedBuildScriptText, 'Get-Sha256Hex\s+-LiteralPath\s+\$privateKey').Count -ge 3)) `
+        'Overlay, signature verification, manifest fingerprint, and private-key identity must stay bound.'
+    $initializeScriptText = Get-Content -LiteralPath ([System.IO.Path]::Combine($updaterTools, 'initialize-updater-key.ps1')) -Raw -Encoding UTF8
+    Test-True 'Key initialization generates into owned staging files before publication' `
+        ([bool]($initializeScriptText -match '\$stagingPrivateKeyPath' -and `
+                 $initializeScriptText -match 'File\]::Move\(\$stagingPrivateKeyPath, \$privateKeyPath\)' -and `
+                 $initializeScriptText -match '\$publishedPrivateKey\s*=\s*\$true')) `
+        'Failure cleanup must never delete a key file created concurrently by another process.'
+    Test-True 'Key initialization publishes the non-secret public key before the private key' `
+        ($initializeScriptText.IndexOf('File]::Move($stagingPublicKeyPath, $publicKeyPath)') -lt `
+         $initializeScriptText.IndexOf('File]::Move($stagingPrivateKeyPath, $privateKeyPath)')) `
+        'A process interruption must not leave only a private key at the final path.'
+    $commonScriptText = Get-Content -LiteralPath ([System.IO.Path]::Combine($updaterTools, 'common.ps1')) -Raw -Encoding UTF8
+    Test-True 'Git snapshot fingerprints include untracked file bytes' `
+        ([bool]($commonScriptText -match 'ls-files\s+--others\s+--exclude-standard' -and `
+                 $commonScriptText -match '\$untrackedFingerprints' -and `
+                 $commonScriptText -match 'Get-Sha256Hex\s+-LiteralPath\s+\$absolutePath')) `
+        'Dirty release preparation must detect content drift at an existing untracked path.'
+    Test-True 'Atomic latest publication cannot throw a stoppable warning after commit' `
+        ([bool]($commonScriptText -match 'CleanupPending=\$cleanupPending' -and `
+                 $commonScriptText -notmatch "Write-Warning 'Updater pointer replacement succeeded")) `
+        'A post-commit cleanup notice must not trigger rollback through WarningAction Stop.'
+    Test-True 'Published immutable version directories are never deleted during pointer recovery' `
+        ([bool]($prepareScriptText -notmatch 'Directory\]::Delete\(\$versionDirectory')) `
+        'An unexpected post-commit failure must not create a dangling top-level latest pointer.'
+    $gitFingerprintFixture = [System.IO.Path]::Combine($temporaryRoot, 'git-fingerprint-fixture')
+    [void][System.IO.Directory]::CreateDirectory($gitFingerprintFixture)
+    & git -C $gitFingerprintFixture -c core.excludesfile= init --quiet
+    [System.IO.File]::WriteAllText([System.IO.Path]::Combine($gitFingerprintFixture, 'tracked.txt'), 'tracked', $utf8NoBom)
+    & git -C $gitFingerprintFixture -c core.excludesfile= add tracked.txt
+    & git -C $gitFingerprintFixture -c core.excludesfile= -c user.name=UpdaterTest -c user.email=updater-test.invalid commit --quiet -m baseline
+    $untrackedFingerprintPath = [System.IO.Path]::Combine($gitFingerprintFixture, 'untracked.txt')
+    [System.IO.File]::WriteAllText($untrackedFingerprintPath, 'version-a', $utf8NoBom)
+    $untrackedStateA = Get-UpdaterGitState -RepositoryRoot $gitFingerprintFixture
+    [System.IO.File]::WriteAllText($untrackedFingerprintPath, 'version-b', $utf8NoBom)
+    $untrackedStateB = Get-UpdaterGitState -RepositoryRoot $gitFingerprintFixture
+    Test-Equal 'Git snapshot detects byte changes at an existing untracked path' $false `
+        ([string]$untrackedStateA.StateFingerprint -eq [string]$untrackedStateB.StateFingerprint)
+    $isolatedBundleFixture = [System.IO.Path]::Combine($temporaryRoot, 'isolated-bundle-fixture')
+    [void][System.IO.Directory]::CreateDirectory($isolatedBundleFixture)
+    $fixtureProductName = -join @([char]0x4E03,[char]0x9171,[char]0x684C,[char]0x5BA0)
+    $expectedIsolatedInstallerName = $fixtureProductName + '_0.1.0_x64-setup.exe'
+    $expectedIsolatedInstaller = [System.IO.Path]::Combine($isolatedBundleFixture, $expectedIsolatedInstallerName)
+    [System.IO.File]::WriteAllBytes($expectedIsolatedInstaller, [byte[]](1,2,3))
+    $staleIsolatedInstaller = [System.IO.Path]::Combine($isolatedBundleFixture, 'OldProduct_0.1.0_x64-setup.exe')
+    [System.IO.File]::WriteAllBytes($staleIsolatedInstaller, [byte[]](4,5,6))
+    Test-Throws 'Isolated artifact selection rejects a stale same-version installer' {
+        Get-ExactUpdaterInstallerArtifact -BundleDirectory $isolatedBundleFixture -ProductName $fixtureProductName -Version '0.1.0'
+    } 'exactly the expected'
+    [System.IO.File]::Delete($staleIsolatedInstaller)
+    Test-Equal 'Isolated artifact selection returns only the exact current-build installer in Unicode' $expectedIsolatedInstallerName `
+        (Get-ExactUpdaterInstallerArtifact -BundleDirectory $isolatedBundleFixture -ProductName $fixtureProductName -Version '0.1.0').Name
 
     $secretFixture = [System.IO.Path]::Combine($temporaryRoot, 'diagnostic.txt')
     $secretValue = -join @('not','-for','-output')
@@ -641,6 +783,48 @@ try {
         Test-Equal 'Token scanner findings never include a token value' $false `
             ([bool]$serializedTokenFindings.Contains([string]$sensitiveValue))
     }
+    $largeTextFixture = [System.IO.Path]::Combine($temporaryRoot, 'oversized-diagnostic.txt')
+    $largeTextStream = [System.IO.File]::Open($largeTextFixture, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    try { $largeTextStream.SetLength(10MB + 1) } finally { $largeTextStream.Dispose() }
+    $largeFindings = @(Find-UpdaterSecretIndicators -LiteralPath $largeTextFixture)
+    Test-Equal 'Oversized text is blocked instead of silently skipped' 1 @($largeFindings | Where-Object { $_.Category -eq 'unscanned-large-file' }).Count
+    $absoluteKeyPathFixture = [System.IO.Path]::Combine($temporaryRoot, 'absolute-key-path-diagnostic.txt')
+    [System.IO.File]::WriteAllText($absoluteKeyPathFixture, ('location=' + (Get-DefaultUpdaterPrivateKeyPath)), $utf8NoBom)
+    $absolutePathFindings = @(Find-UpdaterSecretIndicators -LiteralPath $absoluteKeyPathFixture)
+    Test-Equal 'Secret scanner detects the local production private-key absolute path' 1 `
+        @($absolutePathFindings | Where-Object { $_.Category -eq 'private-key-absolute-path' }).Count
+    Test-Equal 'Absolute-key-path finding never includes the path value' $false `
+        ([bool](($absolutePathFindings | ConvertTo-Json -Compress).Contains((Get-DefaultUpdaterPrivateKeyPath))))
+    $jsonEscapedKeyPathFindings = @(Find-UpdaterSecretIndicatorsInText `
+        -Text ('{"location":"' + (Get-DefaultUpdaterPrivateKeyPath).Replace('\', '\\') + '"}') -FileName 'escaped-diagnostic.json')
+    Test-Equal 'Secret scanner detects a JSON-escaped production private-key absolute path' 1 `
+        @($jsonEscapedKeyPathFindings | Where-Object { $_.Category -eq 'private-key-absolute-path' }).Count
+
+    $indexFixtureRoot = [System.IO.Path]::Combine($temporaryRoot, 'staged-index-fixture')
+    [void][System.IO.Directory]::CreateDirectory($indexFixtureRoot)
+    & git -C $indexFixtureRoot -c core.excludesfile= init --quiet
+    & git -C $indexFixtureRoot -c core.excludesfile= config user.email 'updater-test@example.invalid'
+    & git -C $indexFixtureRoot -c core.excludesfile= config user.name 'Updater Test'
+    $indexFixturePath = [System.IO.Path]::Combine($indexFixtureRoot, 'staged-diagnostic.txt')
+    [System.IO.File]::WriteAllText($indexFixturePath, 'safe=initial', $utf8NoBom)
+    & git -C $indexFixtureRoot -c core.excludesfile= add -- staged-diagnostic.txt
+    & git -C $indexFixtureRoot -c core.excludesfile= commit --quiet -m 'fixture baseline'
+    $indexOnlyValue = -join @('index','-only','-not','-for','-output')
+    [System.IO.File]::WriteAllText($indexFixturePath, ((-join @('updater_','password','=')) + $indexOnlyValue), $utf8NoBom)
+    & git -C $indexFixtureRoot -c core.excludesfile= add -- staged-diagnostic.txt
+    [System.IO.File]::WriteAllText($indexFixturePath, 'safe=worktree', $utf8NoBom)
+    $indexScanResult = & ([System.IO.Path]::Combine($updaterTools, 'scan-updater-secrets.ps1')) -RepositoryRoot $indexFixtureRoot -ReportOnly 3>$null 4>$null
+    Test-Equal 'Secret scanner reads the staged index blob rather than the cleaned worktree' 1 `
+        @($indexScanResult.Findings | Where-Object { $_.Scope -eq 'staged-index' -and $_.Category -eq 'secret-like-assignment' }).Count
+    Test-Equal 'Staged-index findings never include the staged secret value' $false `
+        ([bool](($indexScanResult.Findings | ConvertTo-Json -Compress).Contains($indexOnlyValue)))
+    $indexOnlyKeyPath = [System.IO.Path]::Combine($indexFixtureRoot, 'forced-production.key')
+    [System.IO.File]::WriteAllText($indexOnlyKeyPath, 'encrypted-container-without-a-plain-secret-header', $utf8NoBom)
+    & git -C $indexFixtureRoot -c core.excludesfile= add -f -- forced-production.key
+    [System.IO.File]::Delete($indexOnlyKeyPath)
+    $indexKeyScanResult = & ([System.IO.Path]::Combine($updaterTools, 'scan-updater-secrets.ps1')) -RepositoryRoot $indexFixtureRoot -ReportOnly 3>$null 4>$null
+    Test-Equal 'Secret scanner rejects a force-added index-only private-key file by extension' 1 `
+        @($indexKeyScanResult.Findings | Where-Object { $_.Scope -eq 'staged-index' -and $_.File -eq 'forced-production.key' -and $_.Category -eq 'private-key-file' }).Count
 
     $cryptoRoot = [System.IO.Path]::Combine($temporaryRoot, 'temporary cryptographic verification')
     [void][System.IO.Directory]::CreateDirectory($cryptoRoot)
@@ -666,6 +850,12 @@ try {
     [System.IO.File]::Copy($signedPayload, $mutatedSignatureArtifact)
     [System.IO.File]::WriteAllText($mutatedSignaturePath, (-join $mutatedSignatureCharacters), $utf8NoBom)
     Test-Equal 'Mutated updater signature is rejected' $false (Test-UpdaterArtifactSignature -ArtifactPath $mutatedSignatureArtifact -SignaturePath $mutatedSignaturePath -PublicKeyPath ($temporaryKeyOne + '.pub'))
+    $commonScriptText = Get-Content -LiteralPath ([System.IO.Path]::Combine($updaterTools, 'common.ps1')) -Raw -Encoding UTF8
+    Test-Equal 'Cryptographic verifier never trusts the repository persistent target cache' $false `
+        ([bool]($commonScriptText -match "src-tauri'.*'target'.*'updater-signature-verifier"))
+    Test-True 'Cryptographic verifier builds locked and offline in a unique temporary target' `
+        ([bool]($commonScriptText -match "'build','--release','--offline','--locked'" -and $commonScriptText -match "qijiang-updater-verify-.*NewGuid")) `
+        'Verifier source and Cargo.lock are compiled for each verification invocation.'
     $cryptographicLatestPath = [System.IO.Path]::Combine($cryptoRoot, 'latest.json')
     & $createScript -Version '0.2.2-beta.1' -CurrentVersion '0.2.1-beta.1' -ArtifactPath $signedPayload `
         -SignaturePath $actualSignaturePath -PublicKeyPath ($temporaryKeyOne + '.pub') -DownloadUrl 'https://updates.qijiang-desktop-pet.com/files/signed-payload-0.2.2-beta.1.bin' `
@@ -693,9 +883,20 @@ try {
     Test-True 'Git ignores PEM signing material' ([bool]($gitignore -match '(?m)^\*\.pem$')) '*.pem'
     Test-True 'Git ignores named updater key backup directories' ([bool]($gitignore -match '(?m)^updater-key-backups/$')) 'updater-key-backups/'
     Test-True 'Git ignores hidden updater key backup directories' ([bool]($gitignore -match '(?m)^\.updater-key-backups/$')) '.updater-key-backups/'
+    Test-True 'Git ignores signing secret directories' ([bool]($gitignore -match '(?m)^signing-secrets/$')) 'signing-secrets/'
+    $remoteVerifierText = Get-Content -LiteralPath ([System.IO.Path]::Combine($updaterTools, 'verify-github-release-assets.ps1')) -Raw -Encoding UTF8
+    Test-True 'Remote verifier exposes a published-release expectation' ([bool]($remoteVerifierText -match "ValidateSet\('Draft','Present'\)")) 'Draft or Present'
+    Test-True 'Remote verifier supports anonymous published-asset downloads without gh auth' `
+        ([bool]($remoteVerifierText -match '\[switch\]\$Anonymous' -and $remoteVerifierText -match 'Invoke-WebRequest' -and $remoteVerifierText -match 'TimeoutSec\s+120' -and $remoteVerifierText -match 'AnonymousPublishedRelease')) `
+        'Published public assets are revalidated through an unauthenticated path.'
 } finally {
     [Environment]::SetEnvironmentVariable('DESK_PET_UPDATER_TEST_MODE', $previousUpdaterTestMode, 'Process')
-    if ([System.IO.Directory]::Exists($temporaryRoot)) { [System.IO.Directory]::Delete($temporaryRoot, $true) }
+    if ([System.IO.Directory]::Exists($temporaryRoot)) {
+        foreach ($temporaryFile in @(Get-ChildItem -LiteralPath $temporaryRoot -File -Recurse -Force -ErrorAction SilentlyContinue)) {
+            try { [System.IO.File]::SetAttributes($temporaryFile.FullName, [System.IO.FileAttributes]::Normal) } catch { }
+        }
+        [System.IO.Directory]::Delete($temporaryRoot, $true)
+    }
 }
 
 $results | Format-Table -AutoSize

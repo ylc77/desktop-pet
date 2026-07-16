@@ -8,7 +8,9 @@ param(
     [Parameter(Mandatory)][string]$LatestJsonPath,
     [Parameter(Mandatory)][string]$ManifestPath,
     [Parameter(Mandatory)][string]$ChecksumPath,
-    [string]$HostingConfigurationPath
+    [string]$HostingConfigurationPath,
+    [ValidateSet('Draft','Present')][string]$ReleaseExpectation = 'Draft',
+    [switch]$Anonymous
 )
 
 $InvocationDirectory = (Get-Location).ProviderPath
@@ -45,25 +47,44 @@ $plannedAssetNames = @(
     [System.IO.Path]::GetFileName($artifact), [System.IO.Path]::GetFileName($signature),
     [System.IO.Path]::GetFileName($latestJson), [System.IO.Path]::GetFileName($manifestPathValue), [System.IO.Path]::GetFileName($checksum)
 )
-$repositoryState = Get-GitHubUpdaterRepositoryState -Repository $repository -HeadCommit $localBundle.ManifestCommit `
-    -Tag $tag -AssetNames $plannedAssetNames -ReleaseExpectation Draft
-if (-not $repositoryState.Authenticated -or -not $repositoryState.QueriesSucceeded -or
-    -not $repositoryState.RepositoryMatches -or -not $repositoryState.PublicRepository -or
-    -not $repositoryState.PermissionSufficient -or -not $repositoryState.HeadCommitExists -or
-    -not $repositoryState.TargetTagStateSatisfied -or -not $repositoryState.TargetReleaseStateSatisfied -or
-    -not $repositoryState.AssetNameStateSatisfied) {
-    throw 'GitHub repository identity, permission, commit, release, tag, or asset verification failed.'
+if ($Anonymous -and $ReleaseExpectation -ne 'Present') {
+    throw 'Anonymous verification is only valid for a published GitHub Release.'
 }
-$gh = Get-Command gh.exe -ErrorAction SilentlyContinue
-if ($null -eq $gh) { $gh = Get-Command gh -ErrorAction Stop }
+$repositoryState = $null
+$gh = $null
+if (-not $Anonymous) {
+    $repositoryState = Get-GitHubUpdaterRepositoryState -Repository $repository -HeadCommit $localBundle.ManifestCommit `
+        -Tag $tag -AssetNames $plannedAssetNames -ReleaseExpectation $ReleaseExpectation
+    if (-not $repositoryState.Authenticated -or -not $repositoryState.QueriesSucceeded -or
+        -not $repositoryState.RepositoryMatches -or -not $repositoryState.PublicRepository -or
+        -not $repositoryState.PermissionSufficient -or -not $repositoryState.HeadCommitExists -or
+        -not $repositoryState.TargetTagStateSatisfied -or -not $repositoryState.TargetReleaseStateSatisfied -or
+        -not $repositoryState.AssetNameStateSatisfied) {
+        throw 'GitHub repository identity, permission, commit, release, tag, or asset verification failed.'
+    }
+    $gh = Get-Command gh.exe -ErrorAction SilentlyContinue
+    if ($null -eq $gh) { $gh = Get-Command gh -ErrorAction Stop }
+}
 $temporaryDirectory = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'qijiang-github-redownload-' + [Guid]::NewGuid().ToString('N'))
 $verificationResult = $null
 try {
     [void][System.IO.Directory]::CreateDirectory($temporaryDirectory)
-    $downloadArguments = Get-GitHubUpdaterReleaseDownloadArguments -Repository $repository -Tag $tag `
-        -AssetNames $plannedAssetNames -DestinationDirectory $temporaryDirectory
-    $downloadExit = Invoke-UpdaterToolProcess -FilePath $gh.Source -ArgumentList $downloadArguments -TimeoutSeconds 300
-    if ($downloadExit -ne 0) { throw 'Authenticated GitHub Release asset download failed.' }
+    if ($Anonymous) {
+        foreach ($assetName in $plannedAssetNames) {
+            $downloadUri = 'https://github.com/' + $repository + '/releases/download/' + [Uri]::EscapeDataString($tag) + '/' + [Uri]::EscapeDataString($assetName)
+            try {
+                Invoke-WebRequest -Uri $downloadUri -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 120 `
+                    -OutFile ([System.IO.Path]::Combine($temporaryDirectory, $assetName)) -ErrorAction Stop | Out-Null
+            } catch {
+                throw 'Anonymous GitHub Release asset download failed.'
+            }
+        }
+    } else {
+        $downloadArguments = Get-GitHubUpdaterReleaseDownloadArguments -Repository $repository -Tag $tag `
+            -AssetNames $plannedAssetNames -DestinationDirectory $temporaryDirectory
+        $downloadExit = Invoke-UpdaterToolProcess -FilePath $gh.Source -ArgumentList $downloadArguments -TimeoutSeconds 300
+        if ($downloadExit -ne 0) { throw 'Authenticated GitHub Release asset download failed.' }
+    }
     $downloadedArtifact = [System.IO.Path]::Combine($temporaryDirectory, [System.IO.Path]::GetFileName($artifact))
     $downloadedSignature = [System.IO.Path]::Combine($temporaryDirectory, [System.IO.Path]::GetFileName($signature))
     $downloadedLatest = [System.IO.Path]::Combine($temporaryDirectory, [System.IO.Path]::GetFileName($latestJson))
@@ -87,7 +108,9 @@ try {
         Verified=$true
         Repository=$repository
         Tag=$tag
-        OperatorLogin=[string]$repositoryState.OperatorLogin
+        OperatorLogin=$(if ($Anonymous) { '<anonymous>' } else { [string]$repositoryState.OperatorLogin })
+        VerificationMode=$(if ($Anonymous) { 'AnonymousPublishedRelease' } else { 'AuthenticatedRelease' })
+        ReleaseExpectation=$ReleaseExpectation
         Artifact=[System.IO.Path]::GetFileName($downloadedArtifact)
         ArtifactSha256=$remoteBundle.ArtifactSha256
         PublicKeyFingerprint=$remoteBundle.PublicKeyFingerprint

@@ -88,6 +88,7 @@ function Assert-UpdaterPrivateKeyPath {
     if (Test-PathWithinDirectory -Path $absolute -Directory $RepositoryRoot) {
         throw 'The updater private key must be stored outside the repository.'
     }
+    Assert-NoUpdaterReparsePoint -Path $absolute -Purpose 'Updater private key'
     $extension = [System.IO.Path]::GetExtension($absolute)
     if (-not [string]::Equals($extension, '.key', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The updater private key path must use the .key extension.'
@@ -199,7 +200,7 @@ function Assert-UpdaterHttpsUrl {
     param([Parameter(Mandatory)][string]$Url)
     $uri = $null
     if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https') {
-        throw "Updater download URL must use HTTPS: $Url"
+        throw 'Updater download URL must use HTTPS.'
     }
     if (-not [string]::IsNullOrWhiteSpace($uri.UserInfo) -or -not [string]::IsNullOrWhiteSpace($uri.Query) -or -not [string]::IsNullOrWhiteSpace($uri.Fragment)) {
         throw 'Updater download URL must not contain credentials, query parameters, or fragments.'
@@ -371,6 +372,22 @@ function Test-UpdaterLatestDocument {
     $json = Get-FileTextWithoutBom -LiteralPath $LatestJsonPath
     Assert-NoUpdaterSensitiveMetadata -Text $json
     try { $document = $json | ConvertFrom-Json } catch { throw 'latest.json is not valid JSON.' }
+    $topLevelNames = @($document.PSObject.Properties.Name | Sort-Object)
+    $expectedTopLevelNames = @('notes','platforms','pub_date','version')
+    if (($topLevelNames -join "`n") -cne (($expectedTopLevelNames | Sort-Object) -join "`n")) {
+        throw 'latest.json must contain exactly version, notes, pub_date, and platforms.'
+    }
+    if ($document.version -isnot [string] -or $document.notes -isnot [string] -or $document.pub_date -isnot [string]) {
+        throw 'latest.json version, notes, and pub_date must be JSON strings.'
+    }
+    if ($null -eq $document.platforms -or $document.platforms -is [string] -or $document.platforms -is [System.Collections.IEnumerable]) {
+        throw 'latest.json platforms must be a JSON object.'
+    }
+    $publicationTime = [DateTimeOffset]::MinValue
+    if ([string]$document.pub_date -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$' -or
+        -not [DateTimeOffset]::TryParse([string]$document.pub_date, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$publicationTime)) {
+        throw 'latest.json pub_date must be an RFC3339 timestamp.'
+    }
     $version = [string]$document.version
     [void](Get-SemVerParts -Version $version)
     Assert-UpdaterVersionIncrease -CurrentVersion $CurrentVersion -Version $version
@@ -384,12 +401,24 @@ function Test-UpdaterLatestDocument {
         if ($platformProperties.Count -ne 1) { throw "latest.json does not contain platform: $ExpectedPlatform" }
     }
     foreach ($property in $platformProperties) {
+        if ([string]$property.Name -notmatch '^[a-z0-9_-]+$') { throw "latest.json contains an invalid platform name: $($property.Name)" }
         $entry = $property.Value
+        if ($null -eq $entry -or $entry -is [string] -or $entry -is [System.Collections.IEnumerable]) {
+            throw "latest.json platform entry must be a JSON object: $($property.Name)"
+        }
+        $entryNames = @($entry.PSObject.Properties.Name | Sort-Object)
+        if (($entryNames -join "`n") -cne ((@('signature','size','url') | Sort-Object) -join "`n")) {
+            throw "latest.json platform entry must contain exactly signature, size, and url: $($property.Name)"
+        }
+        if ($entry.url -isnot [string] -or $entry.signature -isnot [string]) {
+            throw "latest.json platform URL and signature must be JSON strings: $($property.Name)"
+        }
         [void](Assert-UpdaterHttpsUrl -Url ([string]$entry.url))
         $sizeProperty = $entry.PSObject.Properties['size']
         if ($null -eq $sizeProperty) { throw "latest.json contains no artifact size for platform: $($property.Name)" }
         $artifactSize = 0L
-        if (-not [long]::TryParse([string]$sizeProperty.Value, [ref]$artifactSize) -or $artifactSize -le 0) {
+        if ($sizeProperty.Value -is [string] -or $sizeProperty.Value -is [bool] -or
+            -not [long]::TryParse([string]$sizeProperty.Value, [ref]$artifactSize) -or $artifactSize -le 0) {
             throw "latest.json contains an invalid artifact size for platform: $($property.Name)"
         }
         if ($null -ne $ExpectedArtifactSizeBytes -and $artifactSize -ne [long]$ExpectedArtifactSizeBytes) {
@@ -408,6 +437,23 @@ function Get-Sha256Hex {
     return (Get-FileHash -LiteralPath $LiteralPath -Algorithm SHA256).Hash.ToUpperInvariant()
 }
 
+function Get-ExactUpdaterInstallerArtifact {
+    param(
+        [Parameter(Mandatory)][string]$BundleDirectory,
+        [Parameter(Mandatory)][string]$ProductName,
+        [Parameter(Mandatory)][string]$Version,
+        [ValidatePattern('^[A-Za-z0-9_-]+$')][string]$Architecture = 'x64'
+    )
+    [void](Get-SemVerParts -Version $Version)
+    if (-not [System.IO.Directory]::Exists($BundleDirectory)) { throw 'The isolated NSIS bundle directory does not exist.' }
+    $expectedName = $ProductName + '_' + $Version + '_' + $Architecture + '-setup.exe'
+    $installers = @(Get-ChildItem -LiteralPath $BundleDirectory -Filter '*-setup.exe' -File -ErrorAction Stop)
+    if ($installers.Count -ne 1 -or $installers[0].Name -cne $expectedName) {
+        throw "The isolated signed build did not produce exactly the expected NSIS updater artifact: $expectedName"
+    }
+    return $installers[0]
+}
+
 function Get-UpdaterPublicKeyText {
     param([Parameter(Mandatory)][string]$LiteralPath)
     $publicKeyText = (Get-FileTextWithoutBom -LiteralPath $LiteralPath).Trim()
@@ -423,13 +469,37 @@ function Get-UpdaterPublicKeyText {
 function Get-UpdaterPublicKeyFingerprint {
     param([Parameter(Mandatory)][string]$LiteralPath)
     $publicKeyText = Get-UpdaterPublicKeyText -LiteralPath $LiteralPath
-    $bytes = $script:Utf8NoBom.GetBytes($publicKeyText)
+    return Get-UpdaterPublicKeyTextFingerprint -PublicKeyText $publicKeyText
+}
+
+function Get-UpdaterPublicKeyTextFingerprint {
+    param([Parameter(Mandatory)][string]$PublicKeyText)
+    $canonicalText = $PublicKeyText.Trim()
+    if ([string]::IsNullOrWhiteSpace($canonicalText) -or $canonicalText.Length -lt 32 -or
+        $canonicalText -match '(?i)secret key|private key') {
+        throw 'Updater public key text is empty or malformed.'
+    }
+    $bytes = $script:Utf8NoBom.GetBytes($canonicalText)
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try {
         return ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace('-', '').ToUpperInvariant()
     } finally {
         $sha256.Dispose()
     }
+}
+
+function Write-UpdaterPublicKeySnapshot {
+    param(
+        [Parameter(Mandatory)][string]$PublicKeyText,
+        [Parameter(Mandatory)][string]$LiteralPath
+    )
+    if ([System.IO.File]::Exists($LiteralPath) -or [System.IO.Directory]::Exists($LiteralPath)) {
+        throw 'Refusing to overwrite an updater public-key snapshot path.'
+    }
+    $canonicalText = $PublicKeyText.Trim()
+    [void](Get-UpdaterPublicKeyTextFingerprint -PublicKeyText $canonicalText)
+    [System.IO.File]::WriteAllText($LiteralPath, $canonicalText + "`n", $script:Utf8NoBom)
+    return $LiteralPath
 }
 
 function Invoke-UpdaterToolProcess {
@@ -448,6 +518,9 @@ function Invoke-UpdaterToolProcess {
         $effectiveFilePath = $FilePath
         $effectiveArguments = $escapedArguments -join ' '
         if ([System.IO.Path]::GetExtension($FilePath) -in @('.cmd', '.bat')) {
+            if ($FilePath -match '["\r\n%!]' -or @($ArgumentList | Where-Object { [string]$_ -match '["\r\n&|<>^()%!]' }).Count -gt 0) {
+                throw 'Batch tooling paths and arguments must not contain cmd.exe metacharacters.'
+            }
             $commandInterpreter = if (-not [string]::IsNullOrWhiteSpace($env:ComSpec)) { $env:ComSpec } else { [System.IO.Path]::Combine($env:SystemRoot, 'System32', 'cmd.exe') }
             $commandLine = '"' + $FilePath + '"' + $(if ($effectiveArguments.Length) { ' ' + $effectiveArguments } else { '' })
             $effectiveFilePath = $commandInterpreter
@@ -493,28 +566,21 @@ function Test-UpdaterArtifactSignature {
     if (-not $cargo) { throw 'Cargo is required for offline updater signature verification.' }
     $verifierManifest = [System.IO.Path]::Combine($script:UpdaterToolsDirectory, 'signature-verifier', 'Cargo.toml')
     if (-not [System.IO.File]::Exists($verifierManifest)) { throw 'Updater signature verifier source is missing.' }
-    $verifierSource = [System.IO.Path]::Combine($script:UpdaterToolsDirectory, 'signature-verifier', 'src', 'main.rs')
-    $verifierTarget = [System.IO.Path]::Combine($script:UpdaterRepositoryRoot, 'src-tauri', 'target', 'updater-signature-verifier')
-    $verifierExecutable = [System.IO.Path]::Combine($verifierTarget, 'debug', 'qijiang-updater-signature-verifier.exe')
-    $needsBuild = -not [System.IO.File]::Exists($verifierExecutable)
-    if (-not $needsBuild) {
-        $executableTimestamp = (Get-Item -LiteralPath $verifierExecutable).LastWriteTimeUtc
-        $needsBuild = (Get-Item -LiteralPath $verifierManifest).LastWriteTimeUtc -gt $executableTimestamp -or
-            (Get-Item -LiteralPath $verifierSource).LastWriteTimeUtc -gt $executableTimestamp
-    }
-    if ($needsBuild) {
+    $verifierLock = [System.IO.Path]::Combine($script:UpdaterToolsDirectory, 'signature-verifier', 'Cargo.lock')
+    if (-not [System.IO.File]::Exists($verifierLock)) { throw 'Updater signature verifier lock file is missing.' }
+
+    $temporaryDirectory = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'qijiang-updater-verify-' + [Guid]::NewGuid().ToString('N'))
+    try {
+        [void][System.IO.Directory]::CreateDirectory($temporaryDirectory)
+        $verifierTarget = [System.IO.Path]::Combine($temporaryDirectory, 'cargo-target')
+        $verifierExecutable = [System.IO.Path]::Combine($verifierTarget, 'release', 'qijiang-updater-signature-verifier.exe')
         $buildExit = Invoke-UpdaterToolProcess -FilePath $cargo.Source -ArgumentList @(
-            'build','--offline','--locked','--quiet','--manifest-path',$verifierManifest,'--target-dir',$verifierTarget
+            'build','--release','--offline','--locked','--quiet','--manifest-path',$verifierManifest,'--target-dir',$verifierTarget
         ) -TimeoutSeconds $TimeoutSeconds
         if ($buildExit -eq 124) { throw 'Updater signature verifier compilation timed out.' }
         if ($buildExit -ne 0 -or -not [System.IO.File]::Exists($verifierExecutable)) {
             throw 'Updater signature verifier could not be compiled offline.'
         }
-    }
-
-    $temporaryDirectory = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'qijiang-updater-verify-' + [Guid]::NewGuid().ToString('N'))
-    try {
-        [void][System.IO.Directory]::CreateDirectory($temporaryDirectory)
         $decodedSignature = [System.IO.Path]::Combine($temporaryDirectory, 'artifact.sig')
         [System.IO.File]::WriteAllBytes($decodedSignature, [Convert]::FromBase64String($signatureText))
         $normalizedPublicKey = [System.IO.Path]::Combine($temporaryDirectory, 'updater.pub')
@@ -551,20 +617,62 @@ function Get-UpdaterGitState {
         # Some locked-down Windows profiles expose an unreadable global excludes file.
         # Native Git warnings must not hide the actual exit code or leak profile paths.
         $ErrorActionPreference = 'Continue'
-        $commitOutput = @(& git -C $RepositoryRoot rev-parse HEAD 2>$null)
+        $commitOutput = @(& git -C $RepositoryRoot -c core.excludesfile= rev-parse HEAD 2>$null)
         $commitExitCode = $LASTEXITCODE
-        $statusOutput = @(& git -C $RepositoryRoot status --porcelain --untracked-files=normal 2>$null)
+        $statusOutput = @(& git -C $RepositoryRoot -c core.excludesfile= status --porcelain --untracked-files=normal 2>$null)
         $statusExitCode = $LASTEXITCODE
+        $diffOutput = @(& git -C $RepositoryRoot -c core.excludesfile= diff --no-ext-diff --binary HEAD -- 2>$null)
+        $diffExitCode = $LASTEXITCODE
+        $untrackedOutput = @(& git -C $RepositoryRoot -c core.excludesfile= -c core.quotepath=false ls-files --others --exclude-standard 2>$null)
+        $untrackedExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $savedErrorActionPreference
     }
-    if ($commitExitCode -ne 0 -or $commitOutput.Count -eq 0 -or $statusExitCode -ne 0) {
+    if ($commitExitCode -ne 0 -or $commitOutput.Count -eq 0 -or $statusExitCode -ne 0 -or $diffExitCode -ne 0 -or $untrackedExitCode -ne 0) {
         throw 'Unable to determine the Git commit and worktree state.'
     }
-    return [pscustomobject]@{
-        Commit = ([string]$commitOutput[0]).Trim()
-        DirtyWorktree = ($statusOutput.Count -gt 0)
+    $commit = ([string]$commitOutput[0]).Trim()
+    $untrackedFingerprints = @()
+    foreach ($relativePathValue in @($untrackedOutput | Sort-Object)) {
+        $relativePath = [string]$relativePathValue
+        if ([string]::IsNullOrWhiteSpace($relativePath)) { continue }
+        $absolutePath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($RepositoryRoot, $relativePath.Replace('/', [System.IO.Path]::DirectorySeparatorChar)))
+        if (-not (Test-PathWithinDirectory -Path $absolutePath -Directory $RepositoryRoot) -or -not [System.IO.File]::Exists($absolutePath)) {
+            throw 'Unable to fingerprint an untracked Git worktree file.'
+        }
+        $untrackedFingerprints += $relativePath + ':' + (Get-Sha256Hex -LiteralPath $absolutePath)
     }
+    $snapshotText = $commit + "`n" + (($statusOutput | ForEach-Object { [string]$_ }) -join "`n") + `
+        "`n--tracked-diff--`n" + (($diffOutput | ForEach-Object { [string]$_ }) -join "`n") + `
+        "`n--untracked-files--`n" + ($untrackedFingerprints -join "`n")
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $stateFingerprint = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($snapshotText)))).Replace('-', '')
+    } finally {
+        $sha256.Dispose()
+    }
+    return [pscustomobject]@{
+        Commit = $commit
+        DirtyWorktree = ($statusOutput.Count -gt 0)
+        StateFingerprint = $stateFingerprint
+    }
+}
+
+function Assert-UpdaterGitStateUnchanged {
+    param(
+        [Parameter(Mandatory)]$InitialState,
+        [string]$RepositoryRoot = $script:UpdaterRepositoryRoot,
+        [switch]$RequireClean
+    )
+    $currentState = Get-UpdaterGitState -RepositoryRoot $RepositoryRoot
+    if ([string]$currentState.Commit -ne [string]$InitialState.Commit -or
+        [string]$currentState.StateFingerprint -ne [string]$InitialState.StateFingerprint) {
+        throw 'Git HEAD or worktree changed while updater artifacts were being prepared.'
+    }
+    if ($RequireClean -and [bool]$currentState.DirtyWorktree) {
+        throw 'Refusing to publish updater artifacts from a dirty Git worktree.'
+    }
+    return $currentState
 }
 
 function Convert-SecureStringToUpdaterPlainText {
@@ -582,12 +690,24 @@ function Find-UpdaterSecretIndicators {
     param([Parameter(Mandatory)][string]$LiteralPath)
     if (-not [System.IO.File]::Exists($LiteralPath)) { return @() }
     $item = Get-Item -LiteralPath $LiteralPath
-    if ($item.Length -gt 10MB) { return @() }
     $extension = $item.Extension.ToLowerInvariant()
     if ($extension -in @('.exe', '.dll', '.ico', '.png', '.jpg', '.jpeg', '.zip', '.msi', '.7z', '.p12', '.pfx')) { return @() }
+    if ($item.Length -gt 10MB) {
+        return @([pscustomobject]@{ File=$item.Name; Line=0; Category='unscanned-large-file' })
+    }
+    return @(Find-UpdaterSecretIndicatorsInText -Text ([System.IO.File]::ReadAllText($item.FullName)) -FileName $item.Name)
+}
+
+function Find-UpdaterSecretIndicatorsInText {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+        [Parameter(Mandatory)][string]$FileName
+    )
     $findings = @()
     $lineNumber = 0
-    foreach ($line in [System.IO.File]::ReadLines($item.FullName)) {
+    $privateKeyLiteral = $null
+    try { $privateKeyLiteral = Get-DefaultUpdaterPrivateKeyPath } catch { $privateKeyLiteral = $null }
+    foreach ($line in @($Text -split "`r?`n")) {
         $lineNumber++
         $category = $null
         if ($line -match '(?i)^\s*(?:untrusted comment:.*secret key|-----BEGIN [A-Z ]*PRIVATE KEY-----)') {
@@ -603,12 +723,77 @@ function Find-UpdaterSecretIndicators {
             $line -match '(?i)^\s*(?:updater[_-]?)?(?:password|secret|access[_-]?token|api[_-]?key)\s*[:=]\s*[^\s$%<{][^\s]{7,}\s*$'
         ) {
             $category = 'secret-like-assignment'
+        } elseif (-not [string]::IsNullOrWhiteSpace($privateKeyLiteral) -and
+            ($line.Replace('\\', '\').Replace('/', '\')).IndexOf($privateKeyLiteral, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            $category = 'private-key-absolute-path'
         }
         if ($null -ne $category) {
-            $findings += [pscustomobject]@{ File=$item.Name; Line=$lineNumber; Category=$category }
+            $findings += [pscustomobject]@{ File=$FileName; Line=$lineNumber; Category=$category }
         }
     }
     return @($findings)
+}
+
+function Publish-UpdaterFileAtomically {
+    param(
+        [Parameter(Mandatory)][string]$SourcePath,
+        [Parameter(Mandatory)][string]$DestinationPath
+    )
+    if (-not [System.IO.File]::Exists($SourcePath)) { throw 'Atomic updater source file does not exist.' }
+    $destinationDirectory = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($DestinationPath))
+    [void][System.IO.Directory]::CreateDirectory($destinationDirectory)
+    $temporaryPath = [System.IO.Path]::Combine($destinationDirectory, '.publish-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    $cleanupPending = $false
+    try {
+        [System.IO.File]::Copy($SourcePath, $temporaryPath, $false)
+        if ([System.IO.File]::Exists($DestinationPath)) {
+            $backupPath = [System.IO.Path]::Combine($destinationDirectory, '.replace-backup-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+            $replacementCommitted = $false
+            try {
+                [System.IO.File]::Replace($temporaryPath, $DestinationPath, $backupPath, $true)
+                $replacementCommitted = $true
+            } finally {
+                if ([System.IO.File]::Exists($backupPath)) {
+                    try { [System.IO.File]::Delete($backupPath) }
+                    catch {
+                        if (-not $replacementCommitted) { throw }
+                        $cleanupPending = $true
+                    }
+                }
+            }
+        } else {
+            [System.IO.File]::Move($temporaryPath, $DestinationPath)
+        }
+    } finally {
+        if ([System.IO.File]::Exists($temporaryPath)) { [System.IO.File]::Delete($temporaryPath) }
+    }
+    return [pscustomobject]@{ Committed=$true; CleanupPending=$cleanupPending }
+}
+
+function Assert-NoUpdaterReparsePoint {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$Purpose = 'Updater sensitive',
+        [scriptblock]$AttributeResolver
+    )
+    try { $absolutePath = [System.IO.Path]::GetFullPath($Path) } catch { throw "$Purpose path is invalid." }
+    $current = $absolutePath
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        try {
+            $attributes = if ($null -eq $AttributeResolver) { [System.IO.File]::GetAttributes($current) } else { & $AttributeResolver $current }
+            if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "$Purpose paths must not traverse symbolic links, junctions, or mounted-folder reparse points."
+            }
+        } catch [System.IO.FileNotFoundException] {
+        } catch [System.IO.DirectoryNotFoundException] {
+        } catch {
+            if ($_.Exception.Message -match 'must not traverse') { throw }
+            throw "Unable to inspect $($Purpose.ToLowerInvariant()) path for reparse points."
+        }
+        $parent = [System.IO.Path]::GetDirectoryName($current.TrimEnd('\', '/'))
+        if ([string]::IsNullOrWhiteSpace($parent) -or [string]::Equals($parent, $current, [StringComparison]::OrdinalIgnoreCase)) { break }
+        $current = $parent
+    }
 }
 
 function Test-UpdaterKeyFiles {
@@ -620,6 +805,7 @@ function Test-UpdaterKeyFiles {
     $privatePath = Assert-UpdaterPrivateKeyPath -KeyPath $PrivateKeyPath -RepositoryRoot $RepositoryRoot
     if (-not [System.IO.File]::Exists($privatePath)) { throw 'Updater private key file does not exist.' }
     if (-not [System.IO.File]::Exists($PublicKeyPath)) { throw 'Updater public key file does not exist.' }
+    Assert-NoUpdaterReparsePoint -Path $PublicKeyPath -Purpose 'Updater public key'
     if ((Get-Item -LiteralPath $privatePath).Length -eq 0) { throw 'Updater private key file is empty.' }
     $privateText = (Get-FileTextWithoutBom -LiteralPath $privatePath).Trim()
     $decodedPrivateText = $privateText

@@ -20,7 +20,7 @@ if ($VerifySigning) {
     $tauriCli = [System.IO.Path]::Combine($script:UpdaterRepositoryRoot, 'node_modules', '.bin', 'tauri.cmd')
     if (-not [System.IO.File]::Exists($tauriCli)) { throw 'The repository Tauri CLI is not installed.' }
     $password = Read-Host 'Updater key password (input is hidden)' -AsSecureString
-    if ($password.Length -eq 0) { throw 'Updater key password must not be empty.' }
+    if ($password.Length -lt 16) { throw 'Updater key password must contain at least 16 characters.' }
     $plainPassword = Convert-SecureStringToUpdaterPlainText -SecureString $password
     $previousKeyPath = [Environment]::GetEnvironmentVariable('TAURI_SIGNING_PRIVATE_KEY_PATH', 'Process')
     $previousPassword = [Environment]::GetEnvironmentVariable('TAURI_SIGNING_PRIVATE_KEY_PASSWORD', 'Process')
