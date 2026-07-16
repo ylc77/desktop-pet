@@ -1,14 +1,18 @@
 [CmdletBinding()]
 param(
     [string]$InstallerPath,
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\release'),
+    [string]$OutputDirectory,
     [string[]]$TestSummary = @()
 )
 
+$InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'windows\common.ps1')
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = [System.IO.Path]::Combine($repo, 'release') }
+$OutputDirectory = Resolve-CallerPath -Path $OutputDirectory -BaseDirectory $InvocationDirectory
+if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) { $InstallerPath = Resolve-CallerPath -Path $InstallerPath -BaseDirectory $InvocationDirectory }
 $package = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repo 'package.json') | ConvertFrom-Json
 $tauri = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repo 'src-tauri\tauri.conf.json') | ConvertFrom-Json
 $character = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repo 'public\characters\_placeholder\manifest.json') | ConvertFrom-Json
@@ -19,8 +23,10 @@ if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
         Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
     if (-not $installer) { throw "No versioned NSIS installer for $script:ProductName was found in $bundleDirectory." }
 } else {
-    $installer = Get-Item -LiteralPath (Resolve-Path -LiteralPath $InstallerPath).Path
+    $installer = Get-Item -LiteralPath $InstallerPath
 }
+$versionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory $null -InstallerPath $installer.FullName -ExplicitExpectedVersion ([string]$tauri.version)
+Assert-DeskPetVersionContext -VersionContext $versionContext
 $hash = Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256
 $commit = (& git -C $repo rev-parse HEAD 2>$null)
 $dirty = [bool](& git -C $repo status --porcelain --untracked-files=normal)
@@ -28,15 +34,17 @@ $nodeVersion = (& node --version).Trim()
 $rustVersion = (& rustc --version).Trim()
 $tauriVersion = [string]$package.devDependencies.'@tauri-apps/cli'
 
-[System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($OutputDirectory)) | Out-Null
-$output = [System.IO.Path]::GetFullPath($OutputDirectory)
+[System.IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
+$output = $OutputDirectory
 $manifestPath = Join-Path $output 'release-manifest.json'
 $previousManifest = $null
 if ([System.IO.File]::Exists($manifestPath)) {
     try { $previousManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $previousManifest = $null }
 }
 $versionedDestination = Join-Path $output $installer.Name
-Copy-Item -LiteralPath $installer.FullName -Destination $versionedDestination -Force
+if (-not [string]::Equals([System.IO.Path]::GetFullPath($installer.FullName), [System.IO.Path]::GetFullPath($versionedDestination), [StringComparison]::OrdinalIgnoreCase)) {
+    Copy-Item -LiteralPath $installer.FullName -Destination $versionedDestination -Force
+}
 $publicDestination = Join-Path $output $script:PublicInstallerName
 if ([System.IO.File]::Exists($publicDestination)) {
     $existingPublicHash = (Get-FileHash -LiteralPath $publicDestination -Algorithm SHA256).Hash

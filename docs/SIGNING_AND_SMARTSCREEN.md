@@ -1,6 +1,6 @@
 # 代码签名与 SmartScreen
 
-当前 `0.1.0-beta.1-rc.1` NSIS 安装包未签名，`Get-AuthenticodeSignature` 返回 `NotSigned`。内部测试人员必须先使用发布目录中的 `SHA256SUMS.txt` 核对：
+当前 `0.1.0` NSIS 安装包未签名，`Get-AuthenticodeSignature` 返回 `NotSigned`。内部测试人员必须先使用发布目录中的 `SHA256SUMS.txt` 核对：
 
 ```powershell
 Get-FileHash '.\release\七酱桌宠.exe' -Algorithm SHA256

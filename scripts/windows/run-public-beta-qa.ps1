@@ -4,29 +4,38 @@ param(
     [string]$OutputDirectory,
     [string]$InstallerPath,
     [string]$PreviousInstallerPath,
+    [string]$ExpectedVersion,
+    [switch]$UseExistingInstallation,
     [switch]$SkipBuild,
     [switch]$SkipPerformance
 )
 
+$InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 . "$PSScriptRoot\public-beta-common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta') }
-$output = [System.IO.Path]::GetFullPath($OutputDirectory)
+$output = Resolve-CallerPath -Path $OutputDirectory -BaseDirectory $InvocationDirectory
+if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) { $InstallerPath = Resolve-CallerPath -Path $InstallerPath -BaseDirectory $InvocationDirectory }
+if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) { $PreviousInstallerPath = Resolve-CallerPath -Path $PreviousInstallerPath -BaseDirectory $InvocationDirectory }
 $commit = (& git -C $repo rev-parse HEAD).Trim()
 $command = ".\scripts\windows\run-public-beta-qa.ps1 -Mode $Mode -OutputDirectory .\qa-results\public-beta"
 if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) { $command += " -InstallerPath '.\release\$(Split-Path $InstallerPath -Leaf)'" }
 if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) { $command += " -PreviousInstallerPath '<previous>\$(Split-Path $PreviousInstallerPath -Leaf)'" }
 if ($SkipBuild) { $command += ' -SkipBuild' }
 if ($SkipPerformance) { $command += ' -SkipPerformance' }
+if ($UseExistingInstallation) { $command += ' -UseExistingInstallation' }
 $hostFacts = Get-PublicBetaHostFacts
 
 if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $candidate = Get-DeskPetReleaseInstaller -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release'))
     if ($candidate) { $InstallerPath = $candidate.FullName }
 }
+$versionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $InstallerPath -ExplicitExpectedVersion $ExpectedVersion
+$ExpectedVersion = $versionContext.ExpectedVersion
+Assert-DeskPetVersionContext -VersionContext $versionContext
 function Save-EnvironmentResult([string]$EnvironmentId, [string]$Status, [object[]]$Checks, [string[]]$Notes) {
     $currentArtifactFacts = Get-PublicBetaArtifactFacts $InstallerPath
     $result = New-PublicBetaEnvironmentResult -EnvironmentId $EnvironmentId -Mode $Mode -Status $Status -GitCommit $commit -Command $command -HostFacts $hostFacts -ArtifactFacts $currentArtifactFacts -Checks $Checks -Notes $Notes
@@ -96,21 +105,25 @@ if ($Mode -eq 'CurrentMachine') {
     $environmentId = 'current-machine'
     $raw = [System.IO.Path]::Combine($output, $environmentId, 'raw')
     if ($WhatIfPreference) {
-        & "$PSScriptRoot\run-qa-suite.ps1" -Mode CurrentMachine -OutputDirectory $raw -InstallerPath $InstallerPath -SkipBuild:$SkipBuild -SkipPerformance:$SkipPerformance -WhatIf
+        & "$PSScriptRoot\run-qa-suite.ps1" -Mode CurrentMachine -OutputDirectory $raw -InstallerPath $InstallerPath -ExpectedVersion $ExpectedVersion -UseExistingInstallation:$UseExistingInstallation -SkipBuild:$SkipBuild -SkipPerformance:$SkipPerformance -WhatIf
         exit $LASTEXITCODE
     }
     if (-not $PSCmdlet.ShouldProcess('Current Windows user profile', 'Run install, launch, normal-exit, and uninstall QA')) { exit 0 }
     $exitCode = 1
     $invocationError = $null
     try {
-        & "$PSScriptRoot\run-qa-suite.ps1" -Mode CurrentMachine -OutputDirectory $raw -InstallerPath $InstallerPath -SkipBuild:$SkipBuild -SkipPerformance:$SkipPerformance -Confirm:$false
+        & "$PSScriptRoot\run-qa-suite.ps1" -Mode CurrentMachine -OutputDirectory $raw -InstallerPath $InstallerPath -ExpectedVersion $ExpectedVersion -UseExistingInstallation:$UseExistingInstallation -SkipBuild:$SkipBuild -SkipPerformance:$SkipPerformance -Confirm:$false
         $exitCode = $LASTEXITCODE
     } catch {
         $invocationError = $_.Exception.Message
     }
     $rows = @(Read-ResultRows ([System.IO.Path]::Combine($raw, 'qa-results.json')))
     $lifecycleFailures = @($rows | Where-Object { $_.status -eq 'failed' -and $_.category -in @('current-machine', 'transaction') })
-    $installPassed = @($rows | Where-Object { $_.name -eq 'Install application' -and $_.status -eq 'passed' }).Count -gt 0
+    $installPassed = if ($UseExistingInstallation) {
+        @($rows | Where-Object { $_.name -eq 'Installer execution' -and $_.status -eq 'skipped' }).Count -gt 0
+    } else {
+        @($rows | Where-Object { $_.name -eq 'Install application' -and $_.status -eq 'passed' }).Count -gt 0
+    }
     $uninstallPassed = @($rows | Where-Object { $_.name -eq 'Uninstall application' -and $_.status -eq 'passed' }).Count -gt 0
     $lifecycleStatus = if ($lifecycleFailures.Count -or $invocationError -or $exitCode -ne 0) { 'failed' } elseif ($installPassed -and $uninstallPassed) { 'passed' } else { 'not_executed' }
     $singleInstanceStatus = if (@($rows | Where-Object { $_.name -eq 'Single instance and normal exit' -and $_.status -eq 'passed' }).Count) { 'passed' } elseif (@($rows | Where-Object { $_.name -eq 'Single instance and normal exit' -and $_.status -eq 'failed' }).Count) { 'failed' } else { 'not_executed' }
@@ -166,14 +179,14 @@ if ($Mode -eq 'Upgrade') {
     }
     $upgradeOutput = [System.IO.Path]::Combine($output, 'upgrade')
     if ($WhatIfPreference) {
-        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -OutputDirectory $upgradeOutput -WhatIf
+        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -ExpectedVersion $ExpectedVersion -OutputDirectory $upgradeOutput -WhatIf
         exit $LASTEXITCODE
     }
     if (-not $PSCmdlet.ShouldProcess('Explicit disposable Windows QA environment', 'Run real previous-to-current upgrade and uninstall')) { exit 0 }
     $exitCode = 1
     $invocationError = $null
     try {
-        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -OutputDirectory $upgradeOutput -Confirm:$false
+        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -ExpectedVersion $ExpectedVersion -OutputDirectory $upgradeOutput -Confirm:$false
         $exitCode = $LASTEXITCODE
     } catch {
         $invocationError = $_.Exception.Message

@@ -2,7 +2,7 @@
 
 本清单是 `0.1.0` 公开测试版 Gate 的唯一状态总表。状态只能填写 `passed`、`failed`、`blocked` 或 `not_executed`，并必须附带环境结果 JSON 或真实人工记录。自动化、当前机器、Sandbox、Windows 10 VM、Windows 11 VM 和真实硬件结果不得互相替代。
 
-当前结论：**NOT_READY**。`0.1.0-beta.1-rc.1` 已增加卸载清理轮询并仅作为本地验证产物；真实 CurrentMachine 卸载复测通过前，不创建版本标签或公开测试版目录。
+当前结论：**NOT_READY**。`0.1.0` 已增加卸载清理轮询；真实 CurrentMachine 卸载复测通过前，不创建版本标签或公开测试版目录。
 
 ## A. 必须通过
 

@@ -2,23 +2,29 @@
 param(
     [Parameter(Mandatory)][string]$PreviousInstallerPath,
     [Parameter(Mandatory)][string]$InstallerPath,
+    [string]$ExpectedVersion,
     [string]$OutputDirectory,
     [int]$TimeoutSeconds = 300
 )
 
+$InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta', 'upgrade') }
-$previous = (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
-$current = (Resolve-Path -LiteralPath $InstallerPath).Path
+$previous = Resolve-CallerPath -Path $PreviousInstallerPath -BaseDirectory $InvocationDirectory
+$current = Resolve-CallerPath -Path $InstallerPath -BaseDirectory $InvocationDirectory
+$OutputDirectory = Resolve-CallerPath -Path $OutputDirectory -BaseDirectory $InvocationDirectory
 Assert-FileExists $previous 'Previous NSIS installer'
 Assert-FileExists $current 'Current NSIS installer'
+$currentVersionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $current -ExplicitExpectedVersion $ExpectedVersion
+Assert-DeskPetVersionContext -VersionContext $currentVersionContext
+$currentVersion = $currentVersionContext.ExpectedVersion
 $previousHash = (Get-FileHash -LiteralPath $previous -Algorithm SHA256).Hash
 $currentHash = (Get-FileHash -LiteralPath $current -Algorithm SHA256).Hash
 if ($previousHash -eq $currentHash) { throw 'PreviousInstallerPath and InstallerPath resolve to identical artifacts; this is not an upgrade test.' }
-$output = [System.IO.Path]::GetFullPath($OutputDirectory)
+$output = $OutputDirectory
 [System.IO.Directory]::CreateDirectory($output) | Out-Null
 $reportPath = [System.IO.Path]::Combine($output, 'upgrade-result.json')
 $settingsPath = Join-Path $env:APPDATA "$script:AppIdentifier\settings.json"
@@ -45,7 +51,6 @@ try {
     $oldRecords = @(Get-DeskPetInstallRecords -IncludeLegacy)
     if ($oldRecords.Count -ne 1) { throw "Expected one previous-version install record; found $($oldRecords.Count)." }
     $oldVersion = [string](Get-ObjectPropertyValue $oldRecords[0] 'DisplayVersion')
-    $currentVersion = Get-DeskPetReleaseVersion -RepositoryRoot $repo
     if ($oldVersion -eq $currentVersion) { throw "Installed previous version is $oldVersion, the same as the current Release. Same-version reinstall is not an upgrade test." }
     $oldDisplayName = [string](Get-ObjectPropertyValue $oldRecords[0] 'DisplayName')
     $oldExecutableName = if ($oldDisplayName -eq $script:ProductName) { $script:ExecutableName } else { [string]$script:LegacyExecutableNames[0] }
@@ -74,7 +79,7 @@ try {
     if (@($state.checks | Where-Object { -not $_.passed }).Count) { throw 'One or more upgrade assertions failed.' }
 
     $state.phase = 'uninstall-current'
-    & "$PSScriptRoot\uninstall-smoke-test.ps1" -Confirm:$false
+    & "$PSScriptRoot\uninstall-smoke-test.ps1" -ExpectedVersion $currentVersion -Confirm:$false
     if ($LASTEXITCODE -ne 0) { throw 'Current-version uninstall failed after upgrade.' }
     & "$PSScriptRoot\check-leftovers.ps1"
     if ($LASTEXITCODE -ne 0) { throw 'Post-upgrade uninstall leftovers were detected.' }

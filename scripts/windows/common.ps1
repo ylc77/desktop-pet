@@ -15,6 +15,104 @@ $script:LegacyProductNames = @('Desk Pet Framework')
 $script:LegacyExecutableNames = @('desk-pet-framework.exe')
 $script:LegacyProcessNames = @('desk-pet-framework')
 
+function Resolve-CallerPath {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$BaseDirectory
+    )
+    $expanded = [Environment]::ExpandEnvironmentVariables($Path.Trim().Trim('"'))
+    if ([string]::IsNullOrWhiteSpace($expanded)) { throw 'Path is empty.' }
+    if ([string]::IsNullOrWhiteSpace($BaseDirectory) -or -not [System.IO.Path]::IsPathRooted($BaseDirectory)) {
+        throw "BaseDirectory is not an absolute path: $BaseDirectory"
+    }
+    if ([System.IO.Path]::IsPathRooted($expanded)) { return [System.IO.Path]::GetFullPath($expanded) }
+    return [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($BaseDirectory, $expanded))
+}
+
+function Get-DeskPetInstallerVersion {
+    param([Parameter(Mandatory)][string]$InstallerPath)
+    if (-not [System.IO.File]::Exists($InstallerPath)) { throw "Installer not found: $InstallerPath" }
+    $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($InstallerPath)
+    foreach ($candidate in @([string]$versionInfo.ProductVersion, [string]$versionInfo.FileVersion)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and $candidate -match '(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)') {
+            return [string]$Matches['version']
+        }
+    }
+    $fileName = [System.IO.Path]::GetFileName($InstallerPath)
+    $pattern = '^' + [regex]::Escape($script:ProductName) + '_(?<version>.+?)_[^_]+-setup\.exe$'
+    if ($fileName -match $pattern) { return [string]$Matches['version'] }
+    throw "Installer version could not be determined: $fileName"
+}
+
+function Resolve-DeskPetVersionContext {
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [AllowNull()][string]$ReleaseDirectory,
+        [AllowNull()][string]$InstallerPath,
+        [AllowNull()][string]$ExplicitExpectedVersion
+    )
+    $configPath = [System.IO.Path]::Combine($RepositoryRoot, 'src-tauri', 'tauri.conf.json')
+    if (-not [System.IO.File]::Exists($configPath)) { throw "Tauri configuration not found: $configPath" }
+    $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $configVersion = [string](Get-ObjectPropertyValue $config 'version')
+    $manifestVersion = $null
+    $manifestPath = $null
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseDirectory)) {
+        $manifestPath = [System.IO.Path]::Combine($ReleaseDirectory, 'release-manifest.json')
+        if ([System.IO.File]::Exists($manifestPath)) {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $manifestVersion = [string](Get-ObjectPropertyValue $manifest 'version')
+        }
+    }
+    $installerVersion = if ([string]::IsNullOrWhiteSpace($InstallerPath)) { $null } else { Get-DeskPetInstallerVersion -InstallerPath $InstallerPath }
+    $expectedVersion = if (-not [string]::IsNullOrWhiteSpace($ExplicitExpectedVersion)) {
+        $ExplicitExpectedVersion
+    } elseif (-not [string]::IsNullOrWhiteSpace($manifestVersion)) {
+        $manifestVersion
+    } else {
+        $configVersion
+    }
+    [pscustomobject]@{
+        ExpectedVersion = [string]$expectedVersion
+        InstallerVersion = $installerVersion
+        ManifestVersion = $manifestVersion
+        ConfigVersion = $configVersion
+        ManifestPath = $manifestPath
+        InstallerPath = $InstallerPath
+    }
+}
+
+function Assert-DeskPetVersionContext {
+    param(
+        [Parameter(Mandatory)][object]$VersionContext,
+        [AllowEmptyCollection()][string[]]$RegistryVersions = @()
+    )
+    $expected = [string](Get-ObjectPropertyValue $VersionContext 'ExpectedVersion')
+    $installer = [string](Get-ObjectPropertyValue $VersionContext 'InstallerVersion')
+    $manifest = [string](Get-ObjectPropertyValue $VersionContext 'ManifestVersion')
+    $config = [string](Get-ObjectPropertyValue $VersionContext 'ConfigVersion')
+    $actualRegistryVersions = @($RegistryVersions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    $mismatch = [string]::IsNullOrWhiteSpace($expected) -or
+        (-not [string]::IsNullOrWhiteSpace($installer) -and $installer -ne $expected) -or
+        (-not [string]::IsNullOrWhiteSpace($manifest) -and $manifest -ne $expected) -or
+        (-not [string]::IsNullOrWhiteSpace($config) -and $config -ne $expected) -or
+        @($actualRegistryVersions | Where-Object { $_ -ne $expected }).Count -gt 0
+    if ($mismatch) {
+        $registryText = if ($actualRegistryVersions.Count) { $actualRegistryVersions -join ',' } else { '<not checked>' }
+        throw ("Version mismatch: expected={0}; registry={1}; installer={2}; releaseManifest={3}; tauri={4}" -f
+            $expected, $registryText,
+            $(if ([string]::IsNullOrWhiteSpace($installer)) { '<not provided>' } else { $installer }),
+            $(if ([string]::IsNullOrWhiteSpace($manifest)) { '<missing>' } else { $manifest }),
+            $(if ([string]::IsNullOrWhiteSpace($config)) { '<missing>' } else { $config }))
+    }
+}
+
+function Get-DeskPetCurrentMachinePhasePlan {
+    param([switch]$UseExistingInstallation)
+    if ($UseExistingInstallation) { return @('post-install-validation', 'uninstallation', 'post-uninstall-cleanup') }
+    return @('installation', 'post-install-validation', 'uninstallation', 'post-uninstall-cleanup')
+}
+
 function ConvertTo-NormalizedProcessorArchitecture {
     param([AllowNull()][string]$Architecture)
     if ([string]::IsNullOrWhiteSpace($Architecture)) { return $null }

@@ -1,14 +1,17 @@
 [CmdletBinding()]
-param(
-    [string]$ReleaseDirectory = (Join-Path $PSScriptRoot '..\..\release')
-)
+param([string]$ReleaseDirectory)
 
+$InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
-$release = (Resolve-Path -LiteralPath $ReleaseDirectory).Path
+if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) { $ReleaseDirectory = [System.IO.Path]::Combine($script:RepositoryRoot, 'release') }
+$release = Resolve-CallerPath -Path $ReleaseDirectory -BaseDirectory $InvocationDirectory
+if (-not [System.IO.Directory]::Exists($release)) { throw "Release directory not found: $release" }
 $manifestPath = Join-Path $release 'release-manifest.json'
 $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
+$versionContext = Resolve-DeskPetVersionContext -RepositoryRoot $script:RepositoryRoot -ReleaseDirectory $release -InstallerPath ([System.IO.Path]::Combine($release, [string]$manifest.versionedInstallerFile)) -ExplicitExpectedVersion ([string]$manifest.version)
+Assert-DeskPetVersionContext -VersionContext $versionContext
 $installer = Get-Item -LiteralPath (Join-Path $release $manifest.versionedInstallerFile)
 $publicInstaller = Get-Item -LiteralPath (Join-Path $release $manifest.publicInstallerFile)
 $hash = Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256

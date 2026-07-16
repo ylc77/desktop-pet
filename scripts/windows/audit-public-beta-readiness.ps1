@@ -6,13 +6,14 @@ param(
     [switch]$SkipLegacyDiscovery
 )
 
+$InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
 if ([string]::IsNullOrWhiteSpace($ResultsRoot)) { $ResultsRoot = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta') }
-$root = [System.IO.Path]::GetFullPath($ResultsRoot)
-$output = if ($OutputDirectory) { [System.IO.Path]::GetFullPath($OutputDirectory) } else { $root }
+$root = Resolve-CallerPath -Path $ResultsRoot -BaseDirectory $InvocationDirectory
+$output = if ($OutputDirectory) { Resolve-CallerPath -Path $OutputDirectory -BaseDirectory $InvocationDirectory } else { $root }
 [System.IO.Directory]::CreateDirectory($output) | Out-Null
 
 $requirements = @(
@@ -118,6 +119,8 @@ foreach ($requirement in $requirements) {
 }
 
 $releaseInstaller = Get-DeskPetReleaseInstaller -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release'))
+$releaseVersionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $(if ($releaseInstaller) { $releaseInstaller.FullName } else { $null }) -ExplicitExpectedVersion $null
+Assert-DeskPetVersionContext -VersionContext $releaseVersionContext
 $signatureStatus = if ($releaseInstaller) { [string](Get-AuthenticodeSignature -FilePath $releaseInstaller.FullName).Status } else { 'InstallerMissing' }
 $failedRequired = @($evaluated | Where-Object status -eq 'failed')
 $pendingRequired = @($evaluated | Where-Object status -ne 'passed')
@@ -129,6 +132,7 @@ else { $gate = 'PUBLIC_BETA_CANDIDATE' }
 $audit = [ordered]@{
     schemaVersion=1; generatedAtUtc=[DateTime]::UtcNow.ToString('o'); gate=$gate
     gitCommit=(& git -C $repo rev-parse HEAD).Trim(); signatureStatus=$signatureStatus
+    expectedVersion=$releaseVersionContext.ExpectedVersion; installerVersion=$releaseVersionContext.InstallerVersion; releaseManifestVersion=$releaseVersionContext.ManifestVersion
     unsignedRiskAccepted=[bool]$AcceptUnsignedRisk; requirements=@($evaluated)
     environmentResults=@($environments | ForEach-Object { [ordered]@{ environmentId=$_.environmentId; status=$_.status; testedAtUtc=$_.testedAtUtc; gitCommit=$_.gitCommit } })
     legacyCurrentMachine=$legacy

@@ -8,11 +8,11 @@ param(
     )
 )
 
+$InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
-. "$PSScriptRoot\common.ps1"
-$installer = (Resolve-Path -LiteralPath $InstallerPath).Path
+$installer = Resolve-CallerPath -Path $InstallerPath -BaseDirectory $InvocationDirectory
 $results = @()
 Write-Warning 'This test installs and uninstalls the app once per listed path. Program Files may trigger UAC; do not bypass it.'
 if ($WhatIfPreference) {

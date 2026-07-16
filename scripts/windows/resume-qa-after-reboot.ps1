@@ -4,12 +4,13 @@ param(
     [string]$StatePath
 )
 
+$InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
 if ([string]::IsNullOrWhiteSpace($StatePath)) { $StatePath = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta', 'restart', 'restart-state.json') }
 . "$PSScriptRoot\common.ps1"
-$path = [System.IO.Path]::GetFullPath($StatePath)
+$path = Resolve-CallerPath -Path $StatePath -BaseDirectory $InvocationDirectory
 [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($path)) | Out-Null
 
 if ($Phase -eq 'BeforeReboot') {

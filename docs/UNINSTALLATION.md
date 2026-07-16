@@ -15,8 +15,21 @@
 - `%APPDATA%\dev.deskpet.framework`
 - `%LOCALAPPDATA%\dev.deskpet.framework`
 
-不得删除其父目录。`0.1.0-beta.1-rc.1` 已增加最长 60 秒的卸载清理轮询，但真实 CurrentMachine 卸载仍需用户确认后复测。诊断预览命令：
+不得删除其父目录。`0.1.0` 已增加最长 60 秒的卸载清理轮询，但真实 CurrentMachine 卸载仍需用户确认后复测。诊断预览命令：
 
 ```powershell
 .\scripts\windows\run-qa-suite.ps1 -Mode CurrentMachine -ResumeFromPhase Uninstallation -WhatIf
 ```
+
+已经完成安装但尚未完成安装后检查时，先使用现有安装预览模式。该模式不会再次运行安装器；调度器只解析一次 Release 版本，并把同一个 `ExpectedVersion` 传给安装记录选择、运行检查和卸载脚本。用户传入的相对路径始终以调用脚本时的 PowerShell 当前目录为基准，不受提权进程、桌面或 System32 工作目录影响。
+
+```powershell
+.\scripts\windows\run-qa-suite.ps1 `
+  -Mode CurrentMachine `
+  -UseExistingInstallation `
+  -InstallerPath ".\release\七酱桌宠_0.1.0_x64-setup.exe" `
+  -OutputDirectory ".\qa-results-current-machine-rebrand-resume" `
+  -WhatIf
+```
+
+移除 `-WhatIf` 后才会启动现有安装、执行人工托盘退出检查并调用已注册卸载器。卸载器退出后每 500 ms 检查一次清理状态，最多等待 60 秒；脚本不会主动删除残留。

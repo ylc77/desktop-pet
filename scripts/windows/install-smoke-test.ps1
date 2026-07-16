@@ -1,19 +1,22 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [Parameter(Mandatory)][string]$InstallerPath,
+    [string]$ExpectedVersion,
     [string[]]$InstallerArguments = @('/S'),
     [int]$TimeoutSeconds = 180,
     [switch]$ExpectUpgrade
 )
 
+$InvocationDirectory = (Get-Location).ProviderPath
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
-$expectedVersion = Get-DeskPetReleaseVersion -RepositoryRoot $repo
-
-$resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
+$resolvedInstaller = Resolve-CallerPath -Path $InstallerPath -BaseDirectory $InvocationDirectory
 Assert-FileExists $resolvedInstaller 'NSIS installer'
+$versionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $resolvedInstaller -ExplicitExpectedVersion $ExpectedVersion
+Assert-DeskPetVersionContext -VersionContext $versionContext
+$expectedVersion = $versionContext.ExpectedVersion
 $beforeProcesses = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue)
 $beforeInstalls = @(Get-DeskPetInstallRecords)
 $beforeAutostart = @(Get-DeskPetRunEntries)
@@ -48,6 +51,7 @@ if ($process.ExitCode -ne 0) { throw "Installer exited with code $($process.Exit
 
 $afterInstalls = @(Get-DeskPetInstallRecords)
 $afterAutostart = @(Get-DeskPetRunEntries)
+Assert-DeskPetVersionContext -VersionContext $versionContext -RegistryVersions @($afterInstalls | ForEach-Object { [string](Get-ObjectPropertyValue $_ 'DisplayVersion') })
 $selection = Select-DeskPetInstallRecord -Records $afterInstalls -ExpectedVersion $expectedVersion
 foreach ($evaluation in @($selection.Evaluations | Where-Object { -not $_.Usable })) {
     $report += Write-SmokeResult 'Ignored unusable install registry entry' $true ("display={0}; version={1}; path={2}; reasons={3}" -f $evaluation.DisplayName, $evaluation.DisplayVersion, $evaluation.RedactedInstallLocation, ($evaluation.Reasons -join ' '))

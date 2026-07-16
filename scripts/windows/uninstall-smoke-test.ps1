@@ -1,14 +1,19 @@
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
-param([int]$TimeoutSeconds = 180)
+param(
+    [int]$TimeoutSeconds = 180,
+    [string]$ExpectedVersion
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..'))
-$expectedVersion = Get-DeskPetReleaseVersion -RepositoryRoot $repo
+$versionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $null -ExplicitExpectedVersion $ExpectedVersion
+$expectedVersion = $versionContext.ExpectedVersion
 
 $records = @(Get-DeskPetInstallRecords)
 if ($records.Count -eq 0 -and $WhatIfPreference) { Write-Host 'No installed application record; uninstall preview has no action.'; exit 0 }
+Assert-DeskPetVersionContext -VersionContext $versionContext -RegistryVersions @($records | ForEach-Object { [string](Get-ObjectPropertyValue $_ 'DisplayVersion') })
 if (Get-DeskPetRunningProcesses -IncludeLegacy) { throw 'Application is running. Exit through the tray before uninstalling.' }
 $selection = Select-DeskPetUninstallRecord -Records $records -ExpectedVersion $expectedVersion
 if (-not $selection.SelectedRecord) {
