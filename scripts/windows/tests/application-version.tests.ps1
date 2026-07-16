@@ -104,6 +104,10 @@ function New-VersionFixture {
       "name": "$fixturePackageName",
       "version": "$Version",
       "license": "fixture-keep-lock"
+    },
+    "node_modules/version-collision-fixture": {
+      "version": "9.9.9",
+      "license": "fixture-dependency-lock"
     }
   }
 }
@@ -177,11 +181,13 @@ function Get-VersionFixtureState {
     $cargoLockVersion = [regex]::Match($cargoLock, "(?ms)^\[\[package\]\]\r?\nname = `"$cargoLockName`"\r?\nversion = `"([^`"]+)`"").Groups[1].Value
     $packageLockVersion = [regex]::Match($packageLockText, '(?m)^ {2}"version"\s*:\s*"([^"]+)"').Groups[1].Value
     $packageLockRootVersion = [regex]::Match($packageLockText, '(?m)^ {6}"version"\s*:\s*"([^"]+)"').Groups[1].Value
+    $dependencyLockVersion = [regex]::Match($packageLockText, '(?ms)"node_modules/version-collision-fixture"\s*:\s*\{.*?"version"\s*:\s*"([^"]+)"').Groups[1].Value
     $lockLicense = [regex]::Match($packageLockText, '(?m)^ {6}"license"\s*:\s*"([^"]+)"').Groups[1].Value
     return [pscustomobject]@{
         Versions = @([string]$package.version, $packageLockVersion, $packageLockRootVersion, [string]$tauri.version, $cargoManifestVersion, $cargoLockVersion)
         PackageDescription = [string]$package.description
         LockLicense = $lockLicense
+        DependencyLockVersion = $dependencyLockVersion
         ProductName = [string]$tauri.productName
         MainBinaryName = [string]$tauri.mainBinaryName
         Identifier = [string]$tauri.identifier
@@ -205,6 +211,7 @@ try {
     Test-Equal 'Version A is stored in all five version files' '0.2.0-beta.1' ([string]$afterA.Versions[0])
     Test-Equal 'package.json unrelated field is preserved' $beforeA.PackageDescription $afterA.PackageDescription
     Test-Equal 'package-lock.json unrelated field is preserved' $beforeA.LockLicense $afterA.LockLicense
+    Test-Equal 'package-lock.json dependency version is not mistaken for the root package version' '9.9.9' $afterA.DependencyLockVersion
     Test-Equal 'Product name is preserved' $beforeA.ProductName $afterA.ProductName
     Test-Equal 'Main binary name is preserved' $beforeA.MainBinaryName $afterA.MainBinaryName
     Test-Equal 'Identifier is preserved' $beforeA.Identifier $afterA.Identifier

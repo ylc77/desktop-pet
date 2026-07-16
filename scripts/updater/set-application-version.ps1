@@ -403,7 +403,7 @@ if ((Compare-SemVer -Left $Version -Right $currentVersion) -le 0) {
 }
 
 $jsonTopLevelVersionPattern = '^(?<prefix> {2}"version"\s*:\s*")[^"]+(?<suffix>"\s*,?\s*)$'
-$packageLockRootVersionPattern = '^(?<prefix> {6}"version"\s*:\s*")[^"]+(?<suffix>"\s*,?\s*)$'
+$packageLockRootVersionPattern = '(?ms)(?<prefix>^ {2}"packages"\s*:\s*\{\r?\n {4}""\s*:\s*\{\r?\n(?:(?!^ {4}\}).)*?^ {6}"version"\s*:\s*")[^"]+(?<suffix>"\s*,?\s*$)'
 $newTexts = [ordered]@{
     PackageJson = Set-RequiredRegexVersion -Text $texts.PackageJson -Pattern $jsonTopLevelVersionPattern -NewVersion $Version -Description 'package.json top-level'
     PackageLock = Set-RequiredRegexVersion -Text (
