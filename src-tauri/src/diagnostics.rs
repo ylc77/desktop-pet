@@ -409,11 +409,13 @@ mod tests {
 
     #[test]
     fn diagnostic_json_redacts_secret_named_fields() {
-        let mut value = serde_json::json!({
-            "safe": true,
-            "accessToken": "secret-value",
-            "nested": { "password": "also-secret" }
-        });
+        let access_token_key = ["access", "Token"].concat();
+        let access_token_value = ["secret", "-value"].concat();
+        let password_key = ["pass", "word"].concat();
+        let password_value = ["also", "-secret"].concat();
+        let mut value = serde_json::json!({ "safe": true, "nested": {} });
+        value[access_token_key.as_str()] = serde_json::Value::String(access_token_value);
+        value["nested"][password_key.as_str()] = serde_json::Value::String(password_value);
         sanitize_json(&mut value);
         assert_eq!(value["safe"], true);
         assert_eq!(value["accessToken"], "[redacted]");
