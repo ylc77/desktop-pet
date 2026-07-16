@@ -9,9 +9,13 @@ Get-AuthenticodeSignature '.\release\七酱桌宠.exe'
 
 不要绕过 SmartScreen、杀毒软件或企业策略。本机未出现警告不代表其他电脑不会出现。
 
+Tauri Updater 签名与 Windows Authenticode 是两套独立机制：Updater 公钥用于验证更新包完整性和发布授权，Windows 代码签名用于可信发布者身份、证书链和 SmartScreen。当前 Updater 基础已接入但生产密钥未配置；即使以后 Updater `.sig` 验证通过，Windows 状态仍会保持 `NotSigned`，直到项目所有者使用可信代码签名证书签署最终文件。
+
 公开发布前由项目所有者完成：购买或申请可信代码签名证书、安全保存私钥、签名 EXE 和最终安装包、验证时间戳与证书链。Codex 不自动申请证书或处理私钥。
 
 签名后必须重新执行哈希与清单生成、干净 Windows 10/11 安装、SmartScreen、升级、卸载、杀毒软件扫描和签名完整性测试。签名会改变文件哈希，旧校验和不能继续使用。
+
+若同一安装包用于 Tauri Updater，Windows 代码签名和时间戳完成后还必须为最终文件重新生成 Updater `.sig`，再重建 `latest.json`、`SHA256SUMS.txt` 和 release manifest。旧 `.sig` 不能验证字节已经改变的文件。完整顺序见 [Windows 代码签名待办](WINDOWS_CODE_SIGNING_TODO.md) 与 [Updater 发布流程](UPDATER_RELEASE_PROCESS.md)。
 
 ## 公开测试版签名准备清单
 

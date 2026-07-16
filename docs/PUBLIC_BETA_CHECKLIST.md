@@ -2,14 +2,18 @@
 
 本清单是 `0.1.0` 公开测试版 Gate 的唯一状态总表。状态只能填写 `passed`、`failed`、`blocked` 或 `not_executed`，并必须附带环境结果 JSON 或真实人工记录。自动化、当前机器、Sandbox、Windows 10 VM、Windows 11 VM 和真实硬件结果不得互相替代。
 
-当前结论：**NOT_READY**。`0.1.0` 已增加卸载清理轮询；真实 CurrentMachine 卸载复测通过前，不创建版本标签或公开测试版目录。
+当前结论：**BLOCKED / NOT_READY**。`0.1.0` 已接入安全更新与公开测试最小功能基础，发布工具已经可以对 artifact、`.sig` 和外部公钥做真实密码学验签，并校验 `latest.json` 的版本、URL 文件名和实际 `size`；但生产 updater 公钥和 HTTPS endpoint 尚未配置，两个真实版本升级尚未执行，Windows Authenticode 仍为 `NotSigned`。不得把工具能力、普通构建或临时签名测试标记为公开自动更新可用，也不创建正式 beta 标签或公开测试版目录。
 
 ## A. 必须通过
 
 | ID | 验收项目 | 当前状态 | 所需证据 |
 |---|---|---|---|
-| automatic-release | 自动测试及 Release 构建 | passed（需在候选 commit 重跑） | Safe QA 环境结果、命令日志、manifest |
-| current-machine-lifecycle | 当前机器真实安装、启动、退出和卸载 | failed | 最新卸载报告显示 3 项残留 |
+| automatic-release | 自动测试及普通 Release 构建 | passed（需在候选 commit 重跑） | Safe QA 环境结果、命令日志、manifest |
+| updater-foundation | Updater/Process 插件、状态机和用户入口 | passed（需在候选 commit 重跑） | 单元测试、Rust 测试、静态配置检查 |
+| updater-production-config | 生产 updater 公钥和 HTTPS endpoint | blocked | 用户确认、外部私钥验证、公钥指纹、最终配置 |
+| updater-artifacts | 版本化安装包、`.sig`、含实际 size 的 `latest.json` 与 manifest | blocked | 外部生产公钥真实验签及最终产物验证结果 |
+| updater-e2e | 两个真实版本下载、安装、重启和数据保留 | blocked | 隔离环境 A → B 独立结果 |
+| current-machine-lifecycle | 当前候选的真实安装、启动、退出和卸载 | not_executed | 当前候选独立报告；历史结果不能替代 |
 | clean-windows-11 | 干净 Windows 11 生命周期 | blocked | Sandbox/VM 独立结果 |
 | clean-windows-10 | 干净 Windows 10 生命周期 | blocked | Windows 10 VM 独立结果 |
 | webview2-online | 缺失 WebView2 且联网 | not_executed | 隔离环境结果 |
@@ -27,11 +31,13 @@
 | defender | Defender 检查 | not_executed | 扫描时间与结果 |
 | manifest-hash | Manifest 与安装包哈希一致 | passed（需候选 commit 重跑） | Safe QA 结果 |
 | public-docs | 发布、隐私和已知问题文档 | passed（文档基线） | 本目录文档审查 |
-| high-severity-clear | 严重和高优先级问题清零 | failed | 卸载残留尚未解决 |
+| diagnostics-privacy | 诊断导出脱敏且不自动上传 | passed（需在候选 commit 重跑） | 自动测试与人工检查导出内容 |
+| high-severity-clear | 严重和高优先级问题清零 | blocked | 当前候选完整生命周期、updater 及干净系统结果 |
 
 ## B. 强烈建议
 
 - [ ] 可信 Windows 代码签名、SHA-256 摘要和时间戳。
+- [ ] 生产 Tauri Updater 私钥的非空密码、仓库外存储与至少两份离线备份。
 - [ ] 记录真实 SmartScreen 首次下载体验。
 - [ ] Defender 之外的误报检查；不得上传私人构建，除非用户明确授权。
 - [ ] Windows 10/11 各自独立干净 VM、普通用户和管理员权限对比。
@@ -43,7 +49,9 @@
 
 - ARM64：当前只验证 x64。
 - 完全离线 WebView2：当前 `downloadBootstrapper` 不包含离线 Runtime。
-- 自动更新、Microsoft Store、macOS、Linux：当前未实现。
+- Microsoft Store、macOS、Linux：当前未实现。
+
+自动更新不属于“可延期且已完成”：基础虽已接入，但生产密钥/endpoint 与端到端验证未完成，是当前公开测试 Gate 的阻塞项。
 
 ## 证据要求
 
@@ -52,3 +60,5 @@
 ```powershell
 .\scripts\windows\audit-public-beta-readiness.ps1
 ```
+
+Updater 专项清单见 [UPDATER_QA.md](UPDATER_QA.md)。审核必须显式接收仓库外生产公钥并真实验证安装包签名；若检测到 `NOT_CONFIGURED`、缺少 `.sig`/`latest.json`、签名未通过、Windows `NotSigned` 风险或没有 A → B 真实证据，必须保留对应 `blocked`/`failed`/`not_executed` 状态，不得通过手工改报告绕过。
