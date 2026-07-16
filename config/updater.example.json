@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "configured": false,
+  "channel": "beta",
+  "endpoint": "https://updates.example.com/qijiang-desktop-pet/latest.json",
+  "publicKey": "REPLACE_WITH_THE_TAURI_UPDATER_PUBLIC_KEY",
+  "installMode": "passive",
+  "comment": "Example only. Do not enable until the real HTTPS endpoint and backed-up production public key are approved."
+}

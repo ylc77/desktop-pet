@@ -5,6 +5,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $windowsRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..'))
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($windowsRoot, '..', '..'))
+. ([System.IO.Path]::Combine($windowsRoot, 'common.ps1'))
+$releaseManifest = Get-Content -LiteralPath ([System.IO.Path]::Combine($repo, 'release', 'release-manifest.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
 $root = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'desk-pet-public-beta-test-' + [guid]::NewGuid().ToString('N'))
 $results = @()
 function Add-Test([string]$Name, [object]$Expected, [object]$Actual) {
@@ -15,12 +17,19 @@ try {
     [System.IO.Directory]::CreateDirectory($root) | Out-Null
     & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
     $emptyAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
-    Add-Test 'Missing evidence remains internal-only' 'INTERNAL_TEST_ONLY' $emptyAudit.gate
-    Add-Test 'Missing evidence is not passed' 0 $emptyAudit.counts.passed
+    Add-Test 'Missing updater configuration blocks public beta gate' 'BLOCKED' $emptyAudit.gate
+    Add-Test 'Updater status is explicitly NOT_CONFIGURED' 'NOT_CONFIGURED' $emptyAudit.updaterStatus
+    $automaticRequirement = @($emptyAudit.requirements | Where-Object id -eq 'automatic-release')[0]
+    Add-Test 'Missing environment evidence is not passed' 'not_executed' ([string]$automaticRequirement.status)
+
+    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery -AcceptUnsignedRisk
+    $acceptedRiskAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
+    Add-Test 'AcceptUnsignedRisk cannot bypass a missing updater' 'BLOCKED' $acceptedRiskAudit.gate
 
     $ids = @('automatic-release','current-machine-lifecycle','clean-windows-11','clean-windows-10','webview2-online','webview2-offline','upgrade-0.1x','settings-migration','no-duplicates','single-instance','autostart','restart','sleep-wake','dpi-basic','dual-monitor','stability-8h','defender','manifest-hash','public-docs','high-severity-clear')
     $environment = [ordered]@{
         schemaVersion=1; environmentId='synthetic'; status='passed'; testedAtUtc=[DateTime]::UtcNow.ToString('o'); gitCommit=(& git -C $repo rev-parse HEAD).Trim()
+        expectedVersion=[string]$releaseManifest.version; artifact=[ordered]@{ installerSha256=[string]$releaseManifest.sha256 }
         checks=@($ids | ForEach-Object { [ordered]@{ requirementId=$_; status='passed'; details='synthetic unit-test evidence' } })
     }
     $environmentDirectory = [System.IO.Path]::Combine($root, 'synthetic')
@@ -28,10 +37,12 @@ try {
     $environment | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ([System.IO.Path]::Combine($environmentDirectory, 'environment-result.json')) -Encoding UTF8
     & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
     $completeAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
-    Add-Test 'Complete unsigned evidence is candidate, not ready' 'PUBLIC_BETA_CANDIDATE' $completeAudit.gate
+    Add-Test 'Complete evidence remains blocked without updater configuration' 'BLOCKED' $completeAudit.gate
+    Add-Test 'Matching commit, version and hash evidence is accepted' $true ([bool]$completeAudit.environmentResults[0].evidenceValid)
 
     $olderEnvironment = [ordered]@{
         schemaVersion=1; environmentId='synthetic'; status='failed'; testedAtUtc='2000-01-01T00:00:00Z'; gitCommit=$environment.gitCommit
+        expectedVersion=$environment.expectedVersion; artifact=$environment.artifact
         checks=@($ids | ForEach-Object { [ordered]@{ requirementId=$_; status=$(if($_ -eq 'automatic-release'){'failed'}else{'passed'}); details='older synthetic evidence' } })
     }
     $olderDirectory = [System.IO.Path]::Combine($root, 'synthetic-old')
@@ -39,13 +50,30 @@ try {
     $olderEnvironment | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ([System.IO.Path]::Combine($olderDirectory, 'environment-result.json')) -Encoding UTF8
     & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
     $deduplicatedAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
-    Add-Test 'Latest result replaces older evidence from the same environment' 'PUBLIC_BETA_CANDIDATE' $deduplicatedAudit.gate
+    Add-Test 'Latest result replaces older evidence from the same environment' 'BLOCKED' $deduplicatedAudit.gate
 
     $environment.checks[0].status = 'failed'
     $environment | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ([System.IO.Path]::Combine($environmentDirectory, 'environment-result.json')) -Encoding UTF8
     & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
     $failedAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
-    Add-Test 'Failed required evidence forces NOT_READY' 'NOT_READY' $failedAudit.gate
+    Add-Test 'Updater block is not bypassed by other failed evidence' 'BLOCKED' $failedAudit.gate
+
+    $staleEnvironment = [pscustomobject]@{
+        gitCommit='0000000000000000000000000000000000000000'; expectedVersion=[string]$releaseManifest.version
+        artifact=[pscustomobject]@{ installerSha256=[string]$releaseManifest.sha256 }
+    }
+    $staleValidation = Test-DeskPetPublicBetaEvidence -Environment $staleEnvironment -ExpectedCommit $environment.gitCommit -ExpectedVersion ([string]$releaseManifest.version) -ExpectedInstallerSha256 ([string]$releaseManifest.sha256)
+    Add-Test 'Evidence from an older commit is rejected' $false ([bool]$staleValidation.Valid)
+    $wrongVersionEnvironment = [pscustomobject]@{
+        gitCommit=$environment.gitCommit; expectedVersion='9.9.9'; artifact=[pscustomobject]@{ installerSha256=[string]$releaseManifest.sha256 }
+    }
+    $wrongVersionValidation = Test-DeskPetPublicBetaEvidence -Environment $wrongVersionEnvironment -ExpectedCommit $environment.gitCommit -ExpectedVersion ([string]$releaseManifest.version) -ExpectedInstallerSha256 ([string]$releaseManifest.sha256)
+    Add-Test 'Evidence for a different version is rejected' $false ([bool]$wrongVersionValidation.Valid)
+    $wrongHashEnvironment = [pscustomobject]@{
+        gitCommit=$environment.gitCommit; expectedVersion=[string]$releaseManifest.version; artifact=[pscustomobject]@{ installerSha256=('0' * 64) }
+    }
+    $wrongHashValidation = Test-DeskPetPublicBetaEvidence -Environment $wrongHashEnvironment -ExpectedCommit $environment.gitCommit -ExpectedVersion ([string]$releaseManifest.version) -ExpectedInstallerSha256 ([string]$releaseManifest.sha256)
+    Add-Test 'Evidence for a different installer hash is rejected' $false ([bool]$wrongHashValidation.Valid)
 
     $csv = [System.IO.Path]::Combine($root, 'performance.csv')
     @(

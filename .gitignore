@@ -17,3 +17,11 @@ release/
 character-packages/
 qa-results/
 qa-results-*/
+*.key
+*.key.pub
+*.pem
+*.p12
+*.pfx
+updater-secrets/
+.updater-password*
+*.updater-signing-temp*

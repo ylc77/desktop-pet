@@ -32,15 +32,18 @@ function Resolve-CallerPath {
 function Get-DeskPetInstallerVersion {
     param([Parameter(Mandatory)][string]$InstallerPath)
     if (-not [System.IO.File]::Exists($InstallerPath)) { throw "Installer not found: $InstallerPath" }
+    $fileName = [System.IO.Path]::GetFileName($InstallerPath)
+    $pattern = '^' + [regex]::Escape($script:ProductName) + '_(?<version>.+?)_[^_]+-setup\.exe$'
+    if ($fileName -match $pattern) {
+        [void](ConvertFrom-DeskPetSemVer ([string]$Matches['version']))
+        return [string]$Matches['version']
+    }
     $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($InstallerPath)
     foreach ($candidate in @([string]$versionInfo.ProductVersion, [string]$versionInfo.FileVersion)) {
         if (-not [string]::IsNullOrWhiteSpace($candidate) -and $candidate -match '(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)') {
             return [string]$Matches['version']
         }
     }
-    $fileName = [System.IO.Path]::GetFileName($InstallerPath)
-    $pattern = '^' + [regex]::Escape($script:ProductName) + '_(?<version>.+?)_[^_]+-setup\.exe$'
-    if ($fileName -match $pattern) { return [string]$Matches['version'] }
     throw "Installer version could not be determined: $fileName"
 }
 
@@ -55,6 +58,37 @@ function Resolve-DeskPetVersionContext {
     if (-not [System.IO.File]::Exists($configPath)) { throw "Tauri configuration not found: $configPath" }
     $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $configVersion = [string](Get-ObjectPropertyValue $config 'version')
+    $packageVersion = $null
+    $cargoVersion = $null
+    $cargoLockVersion = $null
+    $packagePath = [System.IO.Path]::Combine($RepositoryRoot, 'package.json')
+    if ([System.IO.File]::Exists($packagePath)) {
+        $package = Get-Content -LiteralPath $packagePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $packageVersion = [string](Get-ObjectPropertyValue $package 'version')
+    }
+    $cargoManifestPath = [System.IO.Path]::Combine($RepositoryRoot, 'src-tauri', 'Cargo.toml')
+    $cargoPackageName = $null
+    if ([System.IO.File]::Exists($cargoManifestPath)) {
+        $cargoManifestText = [System.IO.File]::ReadAllText($cargoManifestPath, [System.Text.Encoding]::UTF8)
+        $cargoPackageMatch = [regex]::Match($cargoManifestText, '(?ms)^\[package\]\s*(?<package>.*?)(?=^\[|\z)')
+        if ($cargoPackageMatch.Success) {
+            $cargoVersionMatch = [regex]::Match($cargoPackageMatch.Groups['package'].Value, '(?m)^\s*version\s*=\s*"(?<value>[^"]+)"\s*$')
+            $cargoNameMatch = [regex]::Match($cargoPackageMatch.Groups['package'].Value, '(?m)^\s*name\s*=\s*"(?<value>[^"]+)"\s*$')
+            if ($cargoVersionMatch.Success) { $cargoVersion = $cargoVersionMatch.Groups['value'].Value }
+            if ($cargoNameMatch.Success) { $cargoPackageName = $cargoNameMatch.Groups['value'].Value }
+        }
+    }
+    $cargoLockPath = [System.IO.Path]::Combine($RepositoryRoot, 'src-tauri', 'Cargo.lock')
+    if ([System.IO.File]::Exists($cargoLockPath) -and -not [string]::IsNullOrWhiteSpace($cargoPackageName)) {
+        $cargoLockText = [System.IO.File]::ReadAllText($cargoLockPath, [System.Text.Encoding]::UTF8)
+        foreach ($block in [regex]::Matches($cargoLockText, '(?ms)^\[\[package\]\]\s*(?<package>.*?)(?=^\[\[package\]\]|\z)')) {
+            $nameMatch = [regex]::Match($block.Groups['package'].Value, '(?m)^\s*name\s*=\s*"(?<value>[^"]+)"\s*$')
+            if (-not $nameMatch.Success -or $nameMatch.Groups['value'].Value -ne $cargoPackageName) { continue }
+            $versionMatch = [regex]::Match($block.Groups['package'].Value, '(?m)^\s*version\s*=\s*"(?<value>[^"]+)"\s*$')
+            if ($versionMatch.Success) { $cargoLockVersion = $versionMatch.Groups['value'].Value }
+            break
+        }
+    }
     $manifestVersion = $null
     $manifestPath = $null
     if (-not [string]::IsNullOrWhiteSpace($ReleaseDirectory)) {
@@ -65,18 +99,18 @@ function Resolve-DeskPetVersionContext {
         }
     }
     $installerVersion = if ([string]::IsNullOrWhiteSpace($InstallerPath)) { $null } else { Get-DeskPetInstallerVersion -InstallerPath $InstallerPath }
-    $expectedVersion = if (-not [string]::IsNullOrWhiteSpace($ExplicitExpectedVersion)) {
-        $ExplicitExpectedVersion
-    } elseif (-not [string]::IsNullOrWhiteSpace($manifestVersion)) {
-        $manifestVersion
-    } else {
-        $configVersion
-    }
+    # Tauri is the product's authoritative version source. Explicit QA input and
+    # generated metadata are assertions against it, never competing defaults.
+    $expectedVersion = $configVersion
     [pscustomobject]@{
         ExpectedVersion = [string]$expectedVersion
+        ExplicitExpectedVersion = $ExplicitExpectedVersion
         InstallerVersion = $installerVersion
         ManifestVersion = $manifestVersion
         ConfigVersion = $configVersion
+        PackageVersion = $packageVersion
+        CargoVersion = $cargoVersion
+        CargoLockVersion = $cargoLockVersion
         ManifestPath = $manifestPath
         InstallerPath = $InstallerPath
     }
@@ -91,20 +125,324 @@ function Assert-DeskPetVersionContext {
     $installer = [string](Get-ObjectPropertyValue $VersionContext 'InstallerVersion')
     $manifest = [string](Get-ObjectPropertyValue $VersionContext 'ManifestVersion')
     $config = [string](Get-ObjectPropertyValue $VersionContext 'ConfigVersion')
+    $explicit = [string](Get-ObjectPropertyValue $VersionContext 'ExplicitExpectedVersion')
+    $package = [string](Get-ObjectPropertyValue $VersionContext 'PackageVersion')
+    $cargo = [string](Get-ObjectPropertyValue $VersionContext 'CargoVersion')
+    $cargoLock = [string](Get-ObjectPropertyValue $VersionContext 'CargoLockVersion')
     $actualRegistryVersions = @($RegistryVersions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
     $mismatch = [string]::IsNullOrWhiteSpace($expected) -or
         (-not [string]::IsNullOrWhiteSpace($installer) -and $installer -ne $expected) -or
         (-not [string]::IsNullOrWhiteSpace($manifest) -and $manifest -ne $expected) -or
         (-not [string]::IsNullOrWhiteSpace($config) -and $config -ne $expected) -or
+        (-not [string]::IsNullOrWhiteSpace($explicit) -and $explicit -ne $expected) -or
+        (-not [string]::IsNullOrWhiteSpace($package) -and $package -ne $expected) -or
+        (-not [string]::IsNullOrWhiteSpace($cargo) -and $cargo -ne $expected) -or
+        (-not [string]::IsNullOrWhiteSpace($cargoLock) -and $cargoLock -ne $expected) -or
         @($actualRegistryVersions | Where-Object { $_ -ne $expected }).Count -gt 0
     if ($mismatch) {
         $registryText = if ($actualRegistryVersions.Count) { $actualRegistryVersions -join ',' } else { '<not checked>' }
-        throw ("Version mismatch: expected={0}; registry={1}; installer={2}; releaseManifest={3}; tauri={4}" -f
+        throw ("Version mismatch: expected={0}; registry={1}; installer={2}; releaseManifest={3}; tauri={4}; explicit={5}; package={6}; cargo={7}; cargoLock={8}" -f
             $expected, $registryText,
             $(if ([string]::IsNullOrWhiteSpace($installer)) { '<not provided>' } else { $installer }),
             $(if ([string]::IsNullOrWhiteSpace($manifest)) { '<missing>' } else { $manifest }),
-            $(if ([string]::IsNullOrWhiteSpace($config)) { '<missing>' } else { $config }))
+            $(if ([string]::IsNullOrWhiteSpace($config)) { '<missing>' } else { $config }),
+            $(if ([string]::IsNullOrWhiteSpace($explicit)) { '<not provided>' } else { $explicit }),
+            $(if ([string]::IsNullOrWhiteSpace($package)) { '<missing>' } else { $package }),
+            $(if ([string]::IsNullOrWhiteSpace($cargo)) { '<missing>' } else { $cargo }),
+            $(if ([string]::IsNullOrWhiteSpace($cargoLock)) { '<missing>' } else { $cargoLock }))
     }
+}
+
+function ConvertFrom-DeskPetSemVer {
+    param([Parameter(Mandatory)][string]$Version)
+    $match = [regex]::Match($Version, '^(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:-(?<pre>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$')
+    if (-not $match.Success) { throw "Invalid SemVer: $Version" }
+    [pscustomobject]@{
+        Original = $Version
+        Major = [int64]$match.Groups['major'].Value
+        Minor = [int64]$match.Groups['minor'].Value
+        Patch = [int64]$match.Groups['patch'].Value
+        Prerelease = $(if ($match.Groups['pre'].Success) { @($match.Groups['pre'].Value.Split('.')) } else { [string[]]@() })
+    }
+}
+
+function Compare-DeskPetSemVer {
+    param(
+        [Parameter(Mandatory)][string]$Left,
+        [Parameter(Mandatory)][string]$Right
+    )
+    $leftVersion = ConvertFrom-DeskPetSemVer $Left
+    $rightVersion = ConvertFrom-DeskPetSemVer $Right
+    foreach ($name in @('Major', 'Minor', 'Patch')) {
+        if ($leftVersion.$name -lt $rightVersion.$name) { return -1 }
+        if ($leftVersion.$name -gt $rightVersion.$name) { return 1 }
+    }
+    $leftPre = @($leftVersion.Prerelease)
+    $rightPre = @($rightVersion.Prerelease)
+    if (-not $leftPre.Count -and -not $rightPre.Count) { return 0 }
+    if (-not $leftPre.Count) { return 1 }
+    if (-not $rightPre.Count) { return -1 }
+    $count = [Math]::Max($leftPre.Count, $rightPre.Count)
+    for ($index = 0; $index -lt $count; $index++) {
+        if ($index -ge $leftPre.Count) { return -1 }
+        if ($index -ge $rightPre.Count) { return 1 }
+        $leftPart = [string]$leftPre[$index]
+        $rightPart = [string]$rightPre[$index]
+        $leftNumeric = $leftPart -match '^\d+$'
+        $rightNumeric = $rightPart -match '^\d+$'
+        if ($leftNumeric -and $rightNumeric) {
+            $leftNumber = $leftPart.TrimStart('0'); if (-not $leftNumber) { $leftNumber = '0' }
+            $rightNumber = $rightPart.TrimStart('0'); if (-not $rightNumber) { $rightNumber = '0' }
+            if ($leftNumber.Length -lt $rightNumber.Length) { return -1 }
+            if ($leftNumber.Length -gt $rightNumber.Length) { return 1 }
+            $numericComparison = [string]::CompareOrdinal($leftNumber, $rightNumber)
+            if ($numericComparison -lt 0) { return -1 }
+            if ($numericComparison -gt 0) { return 1 }
+            continue
+        }
+        if ($leftNumeric -and -not $rightNumeric) { return -1 }
+        if (-not $leftNumeric -and $rightNumeric) { return 1 }
+        $comparison = [string]::CompareOrdinal($leftPart, $rightPart)
+        if ($comparison -lt 0) { return -1 }
+        if ($comparison -gt 0) { return 1 }
+    }
+    return 0
+}
+
+function Assert-DeskPetUpgradeIdentity {
+    param(
+        [Parameter(Mandatory)][string]$PreviousVersion,
+        [Parameter(Mandatory)][string]$CurrentVersion,
+        [Parameter(Mandatory)][string]$PreviousIdentifier,
+        [Parameter(Mandatory)][string]$CurrentIdentifier,
+        [Parameter(Mandatory)][string]$PreviousPublicKeyFingerprint,
+        [Parameter(Mandatory)][string]$CurrentPublicKeyFingerprint
+    )
+    if ((Compare-DeskPetSemVer -Left $PreviousVersion -Right $CurrentVersion) -ge 0) {
+        throw "Upgrade versions must satisfy previous < current: previous=$PreviousVersion; current=$CurrentVersion"
+    }
+    if ([string]::IsNullOrWhiteSpace($PreviousIdentifier) -or $PreviousIdentifier -ne $CurrentIdentifier) {
+        throw "Upgrade identifier mismatch: previous=$PreviousIdentifier; current=$CurrentIdentifier"
+    }
+    if ([string]::IsNullOrWhiteSpace($PreviousPublicKeyFingerprint) -or $PreviousPublicKeyFingerprint -ne $CurrentPublicKeyFingerprint) {
+        throw 'Upgrade updater public-key fingerprint mismatch.'
+    }
+}
+
+function Get-DeskPetStringSha256 {
+    param([Parameter(Mandatory)][string]$Value)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+        return -join @($algorithm.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') })
+    } finally { $algorithm.Dispose() }
+}
+
+function Get-UpdaterPublicKeyFingerprint {
+    param([Parameter(Mandatory)][string]$PublicKeyPath)
+    if (-not [System.IO.File]::Exists($PublicKeyPath)) { throw 'Updater public key file does not exist.' }
+    $publicKeyText = [System.IO.File]::ReadAllText($PublicKeyPath, [System.Text.Encoding]::UTF8).Trim()
+    if ([string]::IsNullOrWhiteSpace($publicKeyText)) { throw 'Updater public key file is empty.' }
+    return Get-DeskPetStringSha256 -Value $publicKeyText
+}
+
+function Test-DeskPetUpdaterArtifactSignature {
+    param(
+        [Parameter(Mandatory)][string]$ArtifactPath,
+        [Parameter(Mandatory)][string]$SignaturePath,
+        [Parameter(Mandatory)][string]$PublicKeyPath,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 120
+    )
+    $toolingCommonPath = [System.IO.Path]::Combine($script:RepositoryRoot, 'scripts', 'updater', 'common.ps1')
+    if (-not [System.IO.File]::Exists($toolingCommonPath)) { throw 'Updater verification tooling is missing.' }
+    return [bool](& {
+        param($CommonPath, $Artifact, $Signature, $PublicKey, $Timeout)
+        . $CommonPath
+        Test-UpdaterArtifactSignature -ArtifactPath $Artifact -SignaturePath $Signature -PublicKeyPath $PublicKey -TimeoutSeconds $Timeout
+    } $toolingCommonPath $ArtifactPath $SignaturePath $PublicKeyPath $TimeoutSeconds)
+}
+
+function Get-DeskPetUpdaterManifestPath {
+    param(
+        [Parameter(Mandatory)][string]$ReleaseDirectory,
+        [Parameter(Mandatory)][string]$Version
+    )
+    $preferred = [System.IO.Path]::Combine($ReleaseDirectory, 'updater', $Version, 'updater-release-manifest.json')
+    if ([System.IO.File]::Exists($preferred)) { return $preferred }
+    $updaterRoot = [System.IO.Path]::Combine($ReleaseDirectory, 'updater')
+    if (-not [System.IO.Directory]::Exists($updaterRoot)) { return $null }
+    foreach ($candidate in @(Get-ChildItem -LiteralPath $updaterRoot -Filter 'updater-release-manifest.json' -File -Recurse -ErrorAction SilentlyContinue)) {
+        try {
+            $parsed = Get-Content -LiteralPath $candidate.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ([string](Get-ObjectPropertyValue $parsed 'version') -eq $Version) { return $candidate.FullName }
+        } catch { continue }
+    }
+    return $null
+}
+
+function Get-DeskPetUpdaterReadiness {
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string]$ReleaseDirectory,
+        [Parameter(Mandatory)][string]$ExpectedVersion
+    )
+    $updaterRoot = [System.IO.Path]::Combine($ReleaseDirectory, 'updater')
+    $overlayPath = [System.IO.Path]::Combine($RepositoryRoot, 'src-tauri', 'tauri.updater.conf.json')
+    $buildOverlayEnabled = $false
+    if ([System.IO.File]::Exists($overlayPath)) {
+        try {
+            $overlay = Get-Content -LiteralPath $overlayPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $overlayBundle = Get-ObjectPropertyValue $overlay 'bundle'
+            $buildOverlayEnabled = [bool](Get-ObjectPropertyValue $overlayBundle 'createUpdaterArtifacts')
+        } catch { $buildOverlayEnabled = $false }
+    }
+    $latestPath = [System.IO.Path]::Combine($updaterRoot, 'latest.json')
+    $manifestPath = Get-DeskPetUpdaterManifestPath -ReleaseDirectory $ReleaseDirectory -Version $ExpectedVersion
+    $hasAnyReleaseEvidence = [System.IO.File]::Exists($latestPath) -or
+        -not [string]::IsNullOrWhiteSpace($manifestPath) -or
+        ([System.IO.Directory]::Exists($updaterRoot) -and @(Get-ChildItem -LiteralPath $updaterRoot -File -Recurse -ErrorAction SilentlyContinue).Count -gt 0)
+    $checks = @()
+    if (-not $hasAnyReleaseEvidence) {
+        return [pscustomobject]@{
+            State = 'NOT_CONFIGURED'; Ready = $false; Checks = @(); ManifestPath = $null
+            LatestPath = $latestPath; ArtifactPath = $null; SignaturePath = $null
+            PublicKeyFingerprint = $null; Endpoint = $null; BuildOverlayEnabled = $buildOverlayEnabled
+        }
+    }
+
+    $manifest = $null
+    if (-not [string]::IsNullOrWhiteSpace($manifestPath)) {
+        try { $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $manifest = $null }
+    }
+    $manifestVersion = [string](Get-ObjectPropertyValue $manifest 'version')
+    $currentVersion = [string](Get-ObjectPropertyValue $manifest 'currentVersion')
+    $identifier = [string](Get-ObjectPropertyValue $manifest 'identifier')
+    $fingerprint = [string](Get-ObjectPropertyValue $manifest 'publicKeyFingerprint')
+    if ([string]::IsNullOrWhiteSpace($fingerprint)) { $fingerprint = [string](Get-ObjectPropertyValue $manifest 'updaterPublicKeyFingerprint') }
+    $endpoint = [string](Get-ObjectPropertyValue $manifest 'endpoint')
+    if ([string]::IsNullOrWhiteSpace($endpoint)) { $endpoint = [string](Get-ObjectPropertyValue $manifest 'endpointUrl') }
+    $installMode = [string](Get-ObjectPropertyValue $manifest 'installMode')
+    $artifactFile = [string](Get-ObjectPropertyValue $manifest 'artifactFile')
+    if ([string]::IsNullOrWhiteSpace($artifactFile)) { $artifactFile = [string](Get-ObjectPropertyValue $manifest 'updaterArtifactFile') }
+    $signatureFile = [string](Get-ObjectPropertyValue $manifest 'signatureFile')
+    if ([string]::IsNullOrWhiteSpace($signatureFile)) { $signatureFile = [string](Get-ObjectPropertyValue $manifest 'updaterSignatureFile') }
+    $artifactSha256 = [string](Get-ObjectPropertyValue $manifest 'artifactSha256')
+    if ([string]::IsNullOrWhiteSpace($artifactSha256)) { $artifactSha256 = [string](Get-ObjectPropertyValue $manifest 'sha256') }
+    $signatureSha256 = [string](Get-ObjectPropertyValue $manifest 'signatureSha256')
+    $latestJsonSha256 = [string](Get-ObjectPropertyValue $manifest 'latestJsonSha256')
+    $downloadUrl = [string](Get-ObjectPropertyValue $manifest 'downloadUrl')
+    $updaterGitCommit = [string](Get-ObjectPropertyValue $manifest 'gitCommit')
+    $updaterDirtyWorktreeValue = Get-ObjectPropertyValue $manifest 'dirtyWorktree'
+    $updaterDirtyWorktree = [bool]$updaterDirtyWorktreeValue
+    $updaterCleanWorktree = $null -ne $updaterDirtyWorktreeValue -and -not $updaterDirtyWorktree
+    $manifestDirectory = if ([string]::IsNullOrWhiteSpace($manifestPath)) { [System.IO.Path]::Combine($updaterRoot, $ExpectedVersion) } else { [System.IO.Path]::GetDirectoryName($manifestPath) }
+    $artifactPath = if ([string]::IsNullOrWhiteSpace($artifactFile)) { $null } else { [System.IO.Path]::Combine($manifestDirectory, $artifactFile) }
+    $signaturePath = if ([string]::IsNullOrWhiteSpace($signatureFile)) { $null } else { [System.IO.Path]::Combine($manifestDirectory, $signatureFile) }
+
+    $latest = $null
+    if ([System.IO.File]::Exists($latestPath)) {
+        try { $latest = Get-Content -LiteralPath $latestPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $latest = $null }
+    }
+    $latestVersion = [string](Get-ObjectPropertyValue $latest 'version')
+    $platforms = Get-ObjectPropertyValue $latest 'platforms'
+    $windowsPlatform = $null
+    if ($null -ne $platforms) {
+        foreach ($property in $platforms.PSObject.Properties) {
+            if ($property.Name -match '^windows-(x86_64|aarch64|i686)$') { $windowsPlatform = $property.Value; break }
+        }
+    }
+    $latestUrl = [string](Get-ObjectPropertyValue $windowsPlatform 'url')
+    $latestSignature = [string](Get-ObjectPropertyValue $windowsPlatform 'signature')
+    $latestArtifactSize = 0L
+    $latestSizeValue = Get-ObjectPropertyValue $windowsPlatform 'size'
+    $latestSizeValid = $null -ne $latestSizeValue -and [long]::TryParse([string]$latestSizeValue, [ref]$latestArtifactSize) -and $latestArtifactSize -gt 0
+    $signatureText = if ($signaturePath -and [System.IO.File]::Exists($signaturePath)) { [System.IO.File]::ReadAllText($signaturePath, [System.Text.Encoding]::UTF8).Trim() } else { $null }
+    $signatureMatchesLatest = -not [string]::IsNullOrWhiteSpace($signatureText) -and [string]::Equals($signatureText, $latestSignature, [StringComparison]::Ordinal)
+    $downloadUrlMatchesLatest = -not [string]::IsNullOrWhiteSpace($downloadUrl) -and [string]::Equals($downloadUrl, $latestUrl, [StringComparison]::Ordinal)
+    $actualArtifactHash = if ($artifactPath -and [System.IO.File]::Exists($artifactPath)) { (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash } else { $null }
+    $actualArtifactSize = if ($artifactPath -and [System.IO.File]::Exists($artifactPath)) { (Get-Item -LiteralPath $artifactPath).Length } else { 0L }
+    $actualSignatureHash = if ($signaturePath -and [System.IO.File]::Exists($signaturePath)) { (Get-FileHash -LiteralPath $signaturePath -Algorithm SHA256).Hash } else { $null }
+    $actualLatestHash = if ([System.IO.File]::Exists($latestPath)) { (Get-FileHash -LiteralPath $latestPath -Algorithm SHA256).Hash } else { $null }
+    $latestHasBom = $false
+    if ([System.IO.File]::Exists($latestPath)) {
+        $latestBytes = [System.IO.File]::ReadAllBytes($latestPath)
+        $latestHasBom = $latestBytes.Length -ge 3 -and $latestBytes[0] -eq 0xEF -and $latestBytes[1] -eq 0xBB -and $latestBytes[2] -eq 0xBF
+    }
+    $signatureIsBase64 = $false
+    if (-not [string]::IsNullOrWhiteSpace($signatureText)) {
+        try { [void][Convert]::FromBase64String($signatureText); $signatureIsBase64 = $true } catch { $signatureIsBase64 = $false }
+    }
+    $versionIncrease = $false
+    try { $versionIncrease = (Compare-DeskPetSemVer -Left $currentVersion -Right $manifestVersion) -lt 0 } catch { $versionIncrease = $false }
+    $releaseManifestPath = [System.IO.Path]::Combine($ReleaseDirectory, 'release-manifest.json')
+    $releaseManifestCommit = $null
+    if ([System.IO.File]::Exists($releaseManifestPath)) {
+        try {
+            $releaseManifestDocument = Get-Content -LiteralPath $releaseManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $releaseManifestCommit = [string](Get-ObjectPropertyValue $releaseManifestDocument 'gitCommit')
+        } catch { $releaseManifestCommit = $null }
+    }
+    $headCommit = (& git -C $RepositoryRoot rev-parse HEAD 2>$null)
+    $headCommit = if ($LASTEXITCODE -eq 0 -and $headCommit) { ([string]$headCommit).Trim() } else { $null }
+    $httpsEndpoint = $false
+    $endpointUri = $null
+    if (-not [string]::IsNullOrWhiteSpace($endpoint)) {
+        try { $endpointUri = [uri]$endpoint; $httpsEndpoint = $endpointUri.IsAbsoluteUri -and $endpointUri.Scheme -eq 'https' } catch { $httpsEndpoint = $false }
+    }
+    $httpsLatest = $false
+    $latestUri = $null
+    if (-not [string]::IsNullOrWhiteSpace($latestUrl)) {
+        try { $latestUri = [uri]$latestUrl; $httpsLatest = $latestUri.IsAbsoluteUri -and $latestUri.Scheme -eq 'https' } catch { $httpsLatest = $false }
+    }
+    $urlArtifactName = if ($null -ne $latestUri) { [Uri]::UnescapeDataString([System.IO.Path]::GetFileName($latestUri.AbsolutePath)) } else { $null }
+    $artifactVersionPattern = '(?<![0-9A-Za-z])' + [regex]::Escape($ExpectedVersion) + '(?![0-9A-Za-z])'
+    $artifactBindingValid = -not [string]::IsNullOrWhiteSpace($artifactFile) -and $artifactFile -match $artifactVersionPattern -and
+        [string]::Equals($urlArtifactName, $artifactFile, [StringComparison]::Ordinal) -and $latestSizeValid -and $latestArtifactSize -eq $actualArtifactSize
+    $signatureBindingValid = -not [string]::IsNullOrWhiteSpace($signatureFile) -and [string]::Equals($signatureFile, $artifactFile + '.sig', [StringComparison]::Ordinal)
+    $checks = @(
+        [pscustomobject]@{ Name='Updater build overlay'; Passed=$buildOverlayEnabled; Details='src-tauri/tauri.updater.conf.json createUpdaterArtifacts=true' },
+        [pscustomobject]@{ Name='Updater release manifest'; Passed=$null -ne $manifest; Details=$(if($manifestPath){'updater/<version>/updater-release-manifest.json'}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater version'; Passed=$manifestVersion -eq $ExpectedVersion -and $latestVersion -eq $ExpectedVersion; Details="manifest=$manifestVersion; latest=$latestVersion; expected=$ExpectedVersion" },
+        [pscustomobject]@{ Name='Updater strict version increase'; Passed=$versionIncrease; Details="current=$currentVersion; target=$manifestVersion" },
+        [pscustomobject]@{ Name='Updater identifier'; Passed=$identifier -eq $script:AppIdentifier; Details=$identifier },
+        [pscustomobject]@{ Name='Updater public-key fingerprint'; Passed=-not [string]::IsNullOrWhiteSpace($fingerprint); Details=$(if($fingerprint){$fingerprint}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater HTTPS endpoint'; Passed=$httpsEndpoint; Details=$(if($endpointUri){$endpointUri.DnsSafeHost}else{'missing or invalid'}) },
+        [pscustomobject]@{ Name='Updater Windows install mode'; Passed=$installMode -eq 'passive'; Details=$(if($installMode){$installMode}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater latest JSON'; Passed=$null -ne $latest -and $null -ne $windowsPlatform -and $httpsLatest -and -not $latestHasBom; Details=$(if([System.IO.File]::Exists($latestPath)){'updater/latest.json'}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater download URL binding'; Passed=$downloadUrlMatchesLatest; Details=$(if($latestUrl){$latestUrl}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater artifact URL and size binding'; Passed=$artifactBindingValid; Details="name=$(if($artifactFile){$artifactFile}else{'missing'}); size=$actualArtifactSize" },
+        [pscustomobject]@{ Name='Updater signature filename binding'; Passed=$signatureBindingValid; Details=$(if($signatureFile){$signatureFile}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater artifact'; Passed=$artifactPath -and [System.IO.File]::Exists($artifactPath); Details=$(if($artifactFile){$artifactFile}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater artifact hash'; Passed=-not [string]::IsNullOrWhiteSpace($actualArtifactHash) -and $actualArtifactHash -eq $artifactSha256; Details=$(if($actualArtifactHash){$actualArtifactHash}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater detached signature'; Passed=$signatureIsBase64 -and $signatureMatchesLatest; Details=$(if($signatureFile){$signatureFile}else{'missing'}) },
+        [pscustomobject]@{ Name='Updater metadata hashes'; Passed=$actualSignatureHash -eq $signatureSha256 -and $actualLatestHash -eq $latestJsonSha256; Details="signature=$actualSignatureHash; latest=$actualLatestHash" },
+        [pscustomobject]@{ Name='Updater commit binding'; Passed=-not [string]::IsNullOrWhiteSpace($updaterGitCommit) -and $updaterGitCommit -eq $releaseManifestCommit -and $updaterGitCommit -eq $headCommit; Details="updater=$updaterGitCommit; release=$releaseManifestCommit; head=$headCommit" }
+        [pscustomobject]@{ Name='Updater clean worktree'; Passed=$updaterCleanWorktree; Details="dirty=$(if($null -eq $updaterDirtyWorktreeValue){'missing'}else{$updaterDirtyWorktree})" }
+    )
+    $ready = @($checks | Where-Object { -not $_.Passed }).Count -eq 0
+    [pscustomobject]@{
+        State = $(if ($ready) { 'READY' } else { 'MISCONFIGURED' }); Ready = $ready; Checks = $checks
+        ManifestPath = $manifestPath; LatestPath = $latestPath; ArtifactPath = $artifactPath; SignaturePath = $signaturePath
+        PublicKeyFingerprint = $fingerprint; Endpoint = $endpoint; BuildOverlayEnabled = $buildOverlayEnabled
+    }
+}
+
+function Test-DeskPetPublicBetaEvidence {
+    param(
+        [Parameter(Mandatory)][object]$Environment,
+        [Parameter(Mandatory)][string]$ExpectedCommit,
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [Parameter(Mandatory)][string]$ExpectedInstallerSha256
+    )
+    $reasons = @()
+    $commit = [string](Get-ObjectPropertyValue $Environment 'gitCommit')
+    $version = [string](Get-ObjectPropertyValue $Environment 'expectedVersion')
+    $artifact = Get-ObjectPropertyValue $Environment 'artifact'
+    $sha256 = [string](Get-ObjectPropertyValue $artifact 'installerSha256')
+    if ($commit -ne $ExpectedCommit) { $reasons += "gitCommit=$commit does not match $ExpectedCommit" }
+    if ($version -ne $ExpectedVersion) { $reasons += "expectedVersion=$version does not match $ExpectedVersion" }
+    if ($sha256 -ne $ExpectedInstallerSha256) { $reasons += "installerSha256=$sha256 does not match current Release" }
+    [pscustomobject]@{ Valid=$reasons.Count -eq 0; Reasons=@($reasons) }
 }
 
 function Get-DeskPetCurrentMachinePhasePlan {
@@ -154,9 +492,10 @@ function Get-CurrentProcessArchitecture {
 
 function Get-ObjectPropertyValue {
     param(
-        [Parameter(Mandatory)][object]$InputObject,
+        [Parameter(Mandatory)][AllowNull()][object]$InputObject,
         [Parameter(Mandatory)][string]$Name
     )
+    if ($null -eq $InputObject) { return $null }
     $property = $InputObject.PSObject.Properties[$Name]
     if ($null -eq $property) { return $null }
     return $property.Value

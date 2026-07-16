@@ -187,6 +187,8 @@ try {
     [void](Invoke-QACommand 'Release manifest generation' "& .\scripts\create-release-manifest.ps1 -TestSummary @('QA Safe suite')")
     [void](Invoke-QACommand 'Signature, hash and manifest verification' '& .\scripts\windows\verify-release-artifacts.ps1')
     [void](Invoke-QACommand 'PowerShell syntax' '$e=@(); Get-ChildItem .\scripts -Filter *.ps1 -Recurse | ForEach-Object { try { [void][scriptblock]::Create((Get-Content -Raw -Encoding UTF8 $_.FullName)) } catch { $e += $_.Exception.Message } }; if($e.Count){$e;exit 1}else{exit 0}')
+    [void](Invoke-QACommand 'Updater QA regression tests' '& .\scripts\windows\tests\updater-qa.tests.ps1; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}; & .\scripts\windows\tests\updater-tooling.tests.ps1; exit $LASTEXITCODE')
+    [void](Invoke-QACommand 'Updater secret scan' '& .\scripts\updater\scan-updater-secrets.ps1; exit $LASTEXITCODE')
     [void](Invoke-QACommand 'Git worktree clean' '$s=& git status --porcelain; if($s){$s;exit 1}else{exit 0}')
 
     if ($Mode -ne 'Safe') {

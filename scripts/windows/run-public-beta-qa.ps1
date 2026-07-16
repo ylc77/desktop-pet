@@ -4,6 +4,9 @@ param(
     [string]$OutputDirectory,
     [string]$InstallerPath,
     [string]$PreviousInstallerPath,
+    [string]$PreviousUpdaterManifestPath,
+    [string]$UpdaterManifestPath,
+    [string]$UpdaterPublicKeyPath,
     [string]$ExpectedVersion,
     [switch]$UseExistingInstallation,
     [switch]$SkipBuild,
@@ -20,10 +23,16 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = [System
 $output = Resolve-CallerPath -Path $OutputDirectory -BaseDirectory $InvocationDirectory
 if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) { $InstallerPath = Resolve-CallerPath -Path $InstallerPath -BaseDirectory $InvocationDirectory }
 if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) { $PreviousInstallerPath = Resolve-CallerPath -Path $PreviousInstallerPath -BaseDirectory $InvocationDirectory }
+if (-not [string]::IsNullOrWhiteSpace($PreviousUpdaterManifestPath)) { $PreviousUpdaterManifestPath = Resolve-CallerPath -Path $PreviousUpdaterManifestPath -BaseDirectory $InvocationDirectory }
+if (-not [string]::IsNullOrWhiteSpace($UpdaterManifestPath)) { $UpdaterManifestPath = Resolve-CallerPath -Path $UpdaterManifestPath -BaseDirectory $InvocationDirectory }
+if (-not [string]::IsNullOrWhiteSpace($UpdaterPublicKeyPath)) { $UpdaterPublicKeyPath = Resolve-CallerPath -Path $UpdaterPublicKeyPath -BaseDirectory $InvocationDirectory }
 $commit = (& git -C $repo rev-parse HEAD).Trim()
 $command = ".\scripts\windows\run-public-beta-qa.ps1 -Mode $Mode -OutputDirectory .\qa-results\public-beta"
 if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) { $command += " -InstallerPath '.\release\$(Split-Path $InstallerPath -Leaf)'" }
 if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) { $command += " -PreviousInstallerPath '<previous>\$(Split-Path $PreviousInstallerPath -Leaf)'" }
+if (-not [string]::IsNullOrWhiteSpace($PreviousUpdaterManifestPath)) { $command += " -PreviousUpdaterManifestPath '<previous>\updater-release-manifest.json'" }
+if (-not [string]::IsNullOrWhiteSpace($UpdaterManifestPath)) { $command += " -UpdaterManifestPath '.\release\updater\<version>\updater-release-manifest.json'" }
+if (-not [string]::IsNullOrWhiteSpace($UpdaterPublicKeyPath)) { $command += " -UpdaterPublicKeyPath '<external-public-key>'" }
 if ($SkipBuild) { $command += ' -SkipBuild' }
 if ($SkipPerformance) { $command += ' -SkipPerformance' }
 if ($UseExistingInstallation) { $command += ' -UseExistingInstallation' }
@@ -39,6 +48,7 @@ Assert-DeskPetVersionContext -VersionContext $versionContext
 function Save-EnvironmentResult([string]$EnvironmentId, [string]$Status, [object[]]$Checks, [string[]]$Notes) {
     $currentArtifactFacts = Get-PublicBetaArtifactFacts $InstallerPath
     $result = New-PublicBetaEnvironmentResult -EnvironmentId $EnvironmentId -Mode $Mode -Status $Status -GitCommit $commit -Command $command -HostFacts $hostFacts -ArtifactFacts $currentArtifactFacts -Checks $Checks -Notes $Notes
+    $result['expectedVersion'] = $ExpectedVersion
     $directory = [System.IO.Path]::Combine($output, $EnvironmentId)
     if ($WhatIfPreference) {
         Write-Host "Would write environment result: $([System.IO.Path]::Combine($directory, 'environment-result.json'))"
@@ -55,7 +65,7 @@ function Read-ResultRows([string]$Path) {
 }
 
 if ($Mode -eq 'PublicBetaAudit') {
-    & "$PSScriptRoot\audit-public-beta-readiness.ps1" -ResultsRoot $output -OutputDirectory $output
+    & "$PSScriptRoot\audit-public-beta-readiness.ps1" -ResultsRoot $output -OutputDirectory $output -UpdaterPublicKeyPath $UpdaterPublicKeyPath
     exit $LASTEXITCODE
 }
 
@@ -179,14 +189,14 @@ if ($Mode -eq 'Upgrade') {
     }
     $upgradeOutput = [System.IO.Path]::Combine($output, 'upgrade')
     if ($WhatIfPreference) {
-        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -ExpectedVersion $ExpectedVersion -OutputDirectory $upgradeOutput -WhatIf
+        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -PreviousUpdaterManifestPath $PreviousUpdaterManifestPath -UpdaterManifestPath $UpdaterManifestPath -ExpectedVersion $ExpectedVersion -OutputDirectory $upgradeOutput -WhatIf
         exit $LASTEXITCODE
     }
     if (-not $PSCmdlet.ShouldProcess('Explicit disposable Windows QA environment', 'Run real previous-to-current upgrade and uninstall')) { exit 0 }
     $exitCode = 1
     $invocationError = $null
     try {
-        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -ExpectedVersion $ExpectedVersion -OutputDirectory $upgradeOutput -Confirm:$false
+        & "$PSScriptRoot\upgrade-smoke-test.ps1" -PreviousInstallerPath $PreviousInstallerPath -InstallerPath $InstallerPath -PreviousUpdaterManifestPath $PreviousUpdaterManifestPath -UpdaterManifestPath $UpdaterManifestPath -ExpectedVersion $ExpectedVersion -OutputDirectory $upgradeOutput -Confirm:$false
         $exitCode = $LASTEXITCODE
     } catch {
         $invocationError = $_.Exception.Message

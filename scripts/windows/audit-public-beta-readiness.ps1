@@ -2,6 +2,7 @@
 param(
     [string]$ResultsRoot,
     [string]$OutputDirectory,
+    [string]$UpdaterPublicKeyPath,
     [switch]$AcceptUnsignedRisk,
     [switch]$SkipLegacyDiscovery
 )
@@ -14,7 +15,39 @@ $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '
 if ([string]::IsNullOrWhiteSpace($ResultsRoot)) { $ResultsRoot = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta') }
 $root = Resolve-CallerPath -Path $ResultsRoot -BaseDirectory $InvocationDirectory
 $output = if ($OutputDirectory) { Resolve-CallerPath -Path $OutputDirectory -BaseDirectory $InvocationDirectory } else { $root }
+if (-not [string]::IsNullOrWhiteSpace($UpdaterPublicKeyPath)) { $UpdaterPublicKeyPath = Resolve-CallerPath -Path $UpdaterPublicKeyPath -BaseDirectory $InvocationDirectory }
 [System.IO.Directory]::CreateDirectory($output) | Out-Null
+
+$headCommit = (& git -C $repo rev-parse HEAD).Trim()
+$releaseDirectory = [System.IO.Path]::Combine($repo, 'release')
+$releaseInstaller = Get-DeskPetReleaseInstaller -ReleaseDirectory $releaseDirectory
+$releaseVersionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory $releaseDirectory -InstallerPath $(if ($releaseInstaller) { $releaseInstaller.FullName } else { $null }) -ExplicitExpectedVersion $null
+Assert-DeskPetVersionContext -VersionContext $releaseVersionContext
+$releaseManifestPath = [System.IO.Path]::Combine($releaseDirectory, 'release-manifest.json')
+$releaseManifest = if ([System.IO.File]::Exists($releaseManifestPath)) { Get-Content -LiteralPath $releaseManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+$releaseManifestCommit = [string](Get-ObjectPropertyValue $releaseManifest 'gitCommit')
+$releaseManifestHash = [string](Get-ObjectPropertyValue $releaseManifest 'sha256')
+$releaseManifestDirtyValue = Get-ObjectPropertyValue $releaseManifest 'dirtyWorktree'
+$releaseManifestClean = $null -ne $releaseManifestDirtyValue -and -not [bool]$releaseManifestDirtyValue
+$releaseInstallerHash = if ($releaseInstaller) { (Get-FileHash -LiteralPath $releaseInstaller.FullName -Algorithm SHA256).Hash } else { $null }
+$releaseBindingValid = -not [string]::IsNullOrWhiteSpace($releaseManifestCommit) -and $releaseManifestCommit -eq $headCommit -and
+    -not [string]::IsNullOrWhiteSpace($releaseManifestHash) -and $releaseManifestHash -eq $releaseInstallerHash -and $releaseManifestClean
+$updaterReadiness = Get-DeskPetUpdaterReadiness -RepositoryRoot $repo -ReleaseDirectory $releaseDirectory -ExpectedVersion $releaseVersionContext.ExpectedVersion
+$updaterPublicKeyHash = if (-not [string]::IsNullOrWhiteSpace($UpdaterPublicKeyPath) -and [System.IO.File]::Exists($UpdaterPublicKeyPath)) { Get-UpdaterPublicKeyFingerprint -PublicKeyPath $UpdaterPublicKeyPath } else { $null }
+$updaterPublicKeyVerified = -not [string]::IsNullOrWhiteSpace($updaterPublicKeyHash) -and $updaterPublicKeyHash -eq $updaterReadiness.PublicKeyFingerprint
+$updaterCryptographicSignatureAttempted = $false
+$updaterCryptographicSignatureVerified = $false
+$updaterCryptographicSignatureError = $null
+if (-not [string]::IsNullOrWhiteSpace($UpdaterPublicKeyPath) -and [System.IO.File]::Exists($UpdaterPublicKeyPath) -and
+    -not [string]::IsNullOrWhiteSpace([string]$updaterReadiness.ArtifactPath) -and [System.IO.File]::Exists([string]$updaterReadiness.ArtifactPath) -and
+    -not [string]::IsNullOrWhiteSpace([string]$updaterReadiness.SignaturePath) -and [System.IO.File]::Exists([string]$updaterReadiness.SignaturePath)) {
+    $updaterCryptographicSignatureAttempted = $true
+    try {
+        $updaterCryptographicSignatureVerified = Test-DeskPetUpdaterArtifactSignature -ArtifactPath $updaterReadiness.ArtifactPath -SignaturePath $updaterReadiness.SignaturePath -PublicKeyPath $UpdaterPublicKeyPath
+    } catch {
+        $updaterCryptographicSignatureError = $_.Exception.GetType().Name
+    }
+}
 
 $requirements = @(
     @{id='automatic-release';title='Automated tests and Release build'},
@@ -35,7 +68,9 @@ $requirements = @(
     @{id='stability-8h';title='Eight-hour stability run'},
     @{id='defender';title='Windows Defender check'},
     @{id='manifest-hash';title='Manifest and installer hash consistency'},
+    @{id='release-evidence-binding';title='QA evidence matches Release commit, version, and installer hash'},
     @{id='public-docs';title='Release, privacy, known issue, and install documentation'},
+    @{id='secure-updater';title='Signed HTTPS application updater release'},
     @{id='high-severity-clear';title='No unresolved severe or high-priority issue'}
 )
 
@@ -54,6 +89,14 @@ $environments = @($parsedEnvironments | Group-Object -Property environmentId | F
         if ([string]::IsNullOrWhiteSpace($testedAt)) { [DateTime]::MinValue } else { [DateTime]::Parse($testedAt).ToUniversalTime() }
     }; Descending=$true })[0]
 })
+$evidenceValidation = @()
+foreach ($environment in $environments) {
+    $validation = Test-DeskPetPublicBetaEvidence -Environment $environment -ExpectedCommit $headCommit -ExpectedVersion $releaseVersionContext.ExpectedVersion -ExpectedInstallerSha256 $releaseInstallerHash
+    $environment | Add-Member -NotePropertyName evidenceValid -NotePropertyValue ([bool]$validation.Valid) -Force
+    $environment | Add-Member -NotePropertyName evidenceRejectionReasons -NotePropertyValue @($validation.Reasons) -Force
+    $evidenceValidation += [pscustomobject]@{ environmentId=[string]$environment.environmentId; valid=[bool]$validation.Valid; reasons=@($validation.Reasons) }
+}
+$validEnvironments = @($environments | Where-Object { $_.evidenceValid })
 
 $legacy = $null
 if (-not $SkipLegacyDiscovery) {
@@ -88,28 +131,26 @@ if (-not $SkipLegacyDiscovery) {
     }
 }
 
-$standardCurrent = $environments | Where-Object environmentId -eq 'current-machine' | Select-Object -First 1
-$standardCurrentLifecycle = @(if ($standardCurrent) { $standardCurrent.checks | Where-Object requirementId -eq 'current-machine-lifecycle' | Select-Object -First 1 })
-$standardSingleInstance = @(if ($standardCurrent) { $standardCurrent.checks | Where-Object requirementId -eq 'single-instance' | Select-Object -First 1 })
-$standardHighSeverity = @(if ($standardCurrent) { $standardCurrent.checks | Where-Object requirementId -eq 'high-severity-clear' | Select-Object -First 1 })
+# Pre-schema legacy reports remain visible below for operator context only. They
+# cannot open a gate because they lack commit, version, and installer-hash binding.
 $evaluated = @()
 foreach ($requirement in $requirements) {
     $evidence = @()
-    foreach ($environment in $environments) {
+    foreach ($environment in $validEnvironments) {
         foreach ($check in @($environment.checks)) {
             if ([string]$check.requirementId -eq $requirement.id) {
                 $evidence += [pscustomobject]@{ environmentId=$environment.environmentId; status=[string]$check.status; details=[string]$check.details }
             }
         }
     }
-    if ($requirement.id -eq 'current-machine-lifecycle' -and $null -ne $legacy -and -not $standardCurrentLifecycle.Count) {
-        $evidence += [pscustomobject]@{ environmentId='current-machine-legacy'; status=$legacy.status; details="source=$($legacy.source); failures=$($legacy.failedChecks -join ', ')" }
+    if ($requirement.id -eq 'release-evidence-binding') {
+        $rejectedCount = @($evidenceValidation | Where-Object { -not $_.valid }).Count
+        $bindingStatus = if ($releaseBindingValid -and -not $rejectedCount) { 'passed' } else { 'failed' }
+        $evidence += [pscustomobject]@{ environmentId='release'; status=$bindingStatus; details="releaseBindingValid=$releaseBindingValid; rejectedEvidence=$rejectedCount" }
     }
-    if ($requirement.id -eq 'single-instance' -and $null -ne $legacy -and $null -ne $legacy.singleInstance -and -not $standardSingleInstance.Count) {
-        $evidence += [pscustomobject]@{ environmentId='current-machine-legacy'; status=$legacy.singleInstance.status; details="source=$($legacy.singleInstance.source)" }
-    }
-    if ($requirement.id -eq 'high-severity-clear' -and $null -ne $legacy -and $legacy.status -eq 'failed' -and -not $standardHighSeverity.Count) {
-        $evidence += [pscustomobject]@{ environmentId='current-machine-legacy'; status='failed'; details='A real current-machine uninstall failure remains unresolved.' }
+    if ($requirement.id -eq 'secure-updater') {
+        $updaterStatus = if ($updaterReadiness.State -eq 'READY' -and $updaterPublicKeyVerified -and $updaterCryptographicSignatureVerified) { 'passed' } elseif ($updaterReadiness.State -eq 'NOT_CONFIGURED' -or -not $updaterPublicKeyVerified) { 'blocked' } else { 'failed' }
+        $evidence += [pscustomobject]@{ environmentId='release-updater'; status=$updaterStatus; details="state=$($updaterReadiness.State); publicKeyVerified=$updaterPublicKeyVerified; cryptographicSignatureVerified=$updaterCryptographicSignatureVerified" }
     }
     $status = 'not_executed'
     if (@($evidence | Where-Object status -eq 'failed').Count) { $status = 'failed' }
@@ -118,31 +159,40 @@ foreach ($requirement in $requirements) {
     $evaluated += [pscustomobject]@{ id=$requirement.id; title=$requirement.title; status=$status; evidence=@($evidence) }
 }
 
-$releaseInstaller = Get-DeskPetReleaseInstaller -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release'))
-$releaseVersionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $(if ($releaseInstaller) { $releaseInstaller.FullName } else { $null }) -ExplicitExpectedVersion $null
-Assert-DeskPetVersionContext -VersionContext $releaseVersionContext
 $signatureStatus = if ($releaseInstaller) { [string](Get-AuthenticodeSignature -FilePath $releaseInstaller.FullName).Status } else { 'InstallerMissing' }
 $failedRequired = @($evaluated | Where-Object status -eq 'failed')
 $pendingRequired = @($evaluated | Where-Object status -ne 'passed')
-if ($failedRequired.Count) { $gate = 'NOT_READY' }
+if ($updaterReadiness.State -eq 'NOT_CONFIGURED' -or -not $updaterPublicKeyVerified) { $gate = 'BLOCKED' }
+elseif ($updaterReadiness.State -ne 'READY' -or -not $updaterCryptographicSignatureVerified -or -not $releaseBindingValid) { $gate = 'NOT_READY' }
+elseif ($failedRequired.Count) { $gate = 'NOT_READY' }
 elseif ($pendingRequired.Count) { $gate = 'INTERNAL_TEST_ONLY' }
 elseif ($signatureStatus -eq 'Valid' -or $AcceptUnsignedRisk) { $gate = 'PUBLIC_BETA_READY' }
 else { $gate = 'PUBLIC_BETA_CANDIDATE' }
 
 $audit = [ordered]@{
     schemaVersion=1; generatedAtUtc=[DateTime]::UtcNow.ToString('o'); gate=$gate
-    gitCommit=(& git -C $repo rev-parse HEAD).Trim(); signatureStatus=$signatureStatus
+    gitCommit=$headCommit; signatureStatus=$signatureStatus
     expectedVersion=$releaseVersionContext.ExpectedVersion; installerVersion=$releaseVersionContext.InstallerVersion; releaseManifestVersion=$releaseVersionContext.ManifestVersion
+    releaseBindingValid=$releaseBindingValid; updaterStatus=$updaterReadiness.State; updaterPublicKeyVerified=$updaterPublicKeyVerified
+    updaterCryptographicSignatureAttempted=$updaterCryptographicSignatureAttempted; updaterCryptographicSignatureVerified=$updaterCryptographicSignatureVerified
     unsignedRiskAccepted=[bool]$AcceptUnsignedRisk; requirements=@($evaluated)
-    environmentResults=@($environments | ForEach-Object { [ordered]@{ environmentId=$_.environmentId; status=$_.status; testedAtUtc=$_.testedAtUtc; gitCommit=$_.gitCommit } })
+    environmentResults=@($environments | ForEach-Object { [ordered]@{ environmentId=$_.environmentId; status=$_.status; testedAtUtc=$_.testedAtUtc; gitCommit=$_.gitCommit; evidenceValid=$_.evidenceValid; evidenceRejectionReasons=@($_.evidenceRejectionReasons) } })
     legacyCurrentMachine=$legacy
     counts=[ordered]@{ passed=@($evaluated|Where-Object status -eq 'passed').Count; failed=$failedRequired.Count; blocked=@($evaluated|Where-Object status -eq 'blocked').Count; notExecuted=@($evaluated|Where-Object status -eq 'not_executed').Count }
-    risks=@($(if ($signatureStatus -ne 'Valid') { 'Unsigned public beta risk' }), $(if ($pendingRequired.Count) { 'Required QA remains incomplete.' })) | Where-Object { $_ }
+    risks=@(
+        $(if ($signatureStatus -ne 'Valid') { 'Unsigned public beta risk' }),
+        $(if ($pendingRequired.Count) { 'Required QA remains incomplete.' }),
+        $(if ($updaterReadiness.State -eq 'NOT_CONFIGURED') { 'Updater is NOT_CONFIGURED; public beta publication is blocked.' }),
+        $(if ($updaterReadiness.State -ne 'NOT_CONFIGURED' -and -not $updaterPublicKeyVerified) { 'Updater production public key is missing or does not match the release fingerprint.' }),
+        $(if ($updaterReadiness.State -ne 'NOT_CONFIGURED' -and $updaterPublicKeyVerified -and -not $updaterCryptographicSignatureVerified) { "Updater artifact signature was not cryptographically verified ($updaterCryptographicSignatureError)." }),
+        $(if (-not $releaseBindingValid) { 'Release manifest commit or installer hash does not match the current Release.' }),
+        $(if (@($evidenceValidation | Where-Object { -not $_.valid }).Count) { 'Stale or mismatched QA evidence was rejected.' })
+    ) | Where-Object { $_ }
 }
 $jsonPath = [System.IO.Path]::Combine($output, 'public-beta-readiness.json')
 $mdPath = [System.IO.Path]::Combine($output, 'public-beta-readiness.md')
 $audit | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
-$lines = @('# Public beta readiness', '', "- Gate: **$gate**", "- Git commit: $($audit.gitCommit)", "- Signature: $signatureStatus", "- Generated UTC: $($audit.generatedAtUtc)", '', '| Requirement | Status | Evidence |', '|---|---|---|')
+$lines = @('# Public beta readiness', '', "- Gate: **$gate**", "- Git commit: $($audit.gitCommit)", "- Signature: $signatureStatus", "- Updater: $($updaterReadiness.State)", "- Release binding valid: $releaseBindingValid", "- Generated UTC: $($audit.generatedAtUtc)", '', '| Requirement | Status | Evidence |', '|---|---|---|')
 $lines += @($evaluated | ForEach-Object { $evidenceText = @($_.evidence | ForEach-Object { "$($_.environmentId): $($_.details)" }) -join '; '; "| $($_.title) | $($_.status) | $($evidenceText -replace '\|','/') |" })
 $lines += @('', '## Risks', '') + @($audit.risks | ForEach-Object { "- $_" })
 ($lines -join [Environment]::NewLine) | Set-Content -LiteralPath $mdPath -Encoding UTF8

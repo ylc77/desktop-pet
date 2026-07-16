@@ -2,6 +2,8 @@
 param(
     [Parameter(Mandatory)][string]$PreviousInstallerPath,
     [Parameter(Mandatory)][string]$InstallerPath,
+    [string]$PreviousUpdaterManifestPath,
+    [string]$UpdaterManifestPath,
     [string]$ExpectedVersion,
     [string]$OutputDirectory,
     [int]$TimeoutSeconds = 300
@@ -21,14 +23,49 @@ Assert-FileExists $current 'Current NSIS installer'
 $currentVersionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $current -ExplicitExpectedVersion $ExpectedVersion
 Assert-DeskPetVersionContext -VersionContext $currentVersionContext
 $currentVersion = $currentVersionContext.ExpectedVersion
+$previousVersion = Get-DeskPetInstallerVersion -InstallerPath $previous
+$updaterReleaseDirectory = [System.IO.Path]::Combine($repo, 'release')
+if ([string]::IsNullOrWhiteSpace($PreviousUpdaterManifestPath)) {
+    $PreviousUpdaterManifestPath = Get-DeskPetUpdaterManifestPath -ReleaseDirectory $updaterReleaseDirectory -Version $previousVersion
+} else { $PreviousUpdaterManifestPath = Resolve-CallerPath -Path $PreviousUpdaterManifestPath -BaseDirectory $InvocationDirectory }
+if ([string]::IsNullOrWhiteSpace($UpdaterManifestPath)) {
+    $UpdaterManifestPath = Get-DeskPetUpdaterManifestPath -ReleaseDirectory $updaterReleaseDirectory -Version $currentVersion
+} else { $UpdaterManifestPath = Resolve-CallerPath -Path $UpdaterManifestPath -BaseDirectory $InvocationDirectory }
+if ([string]::IsNullOrWhiteSpace($PreviousUpdaterManifestPath) -or -not [System.IO.File]::Exists($PreviousUpdaterManifestPath)) {
+    throw "Previous updater release manifest was not found for $previousVersion."
+}
+if ([string]::IsNullOrWhiteSpace($UpdaterManifestPath) -or -not [System.IO.File]::Exists($UpdaterManifestPath)) {
+    throw "Current updater release manifest was not found for $currentVersion."
+}
+$previousUpdaterManifest = Get-Content -LiteralPath $PreviousUpdaterManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$currentUpdaterManifest = Get-Content -LiteralPath $UpdaterManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$previousManifestVersion = [string](Get-ObjectPropertyValue $previousUpdaterManifest 'version')
+$currentManifestVersion = [string](Get-ObjectPropertyValue $currentUpdaterManifest 'version')
+if ($previousManifestVersion -ne $previousVersion -or $currentManifestVersion -ne $currentVersion) {
+    throw "Updater manifest version mismatch: previousInstaller=$previousVersion; previousManifest=$previousManifestVersion; currentInstaller=$currentVersion; currentManifest=$currentManifestVersion"
+}
+Assert-DeskPetUpgradeIdentity -PreviousVersion $previousVersion -CurrentVersion $currentVersion `
+    -PreviousIdentifier ([string](Get-ObjectPropertyValue $previousUpdaterManifest 'identifier')) `
+    -CurrentIdentifier ([string](Get-ObjectPropertyValue $currentUpdaterManifest 'identifier')) `
+    -PreviousPublicKeyFingerprint ([string](Get-ObjectPropertyValue $previousUpdaterManifest 'publicKeyFingerprint')) `
+    -CurrentPublicKeyFingerprint ([string](Get-ObjectPropertyValue $currentUpdaterManifest 'publicKeyFingerprint'))
 $previousHash = (Get-FileHash -LiteralPath $previous -Algorithm SHA256).Hash
 $currentHash = (Get-FileHash -LiteralPath $current -Algorithm SHA256).Hash
 if ($previousHash -eq $currentHash) { throw 'PreviousInstallerPath and InstallerPath resolve to identical artifacts; this is not an upgrade test.' }
+if ([string](Get-ObjectPropertyValue $previousUpdaterManifest 'artifactSha256') -ne $previousHash -or
+    [string](Get-ObjectPropertyValue $currentUpdaterManifest 'artifactSha256') -ne $currentHash) {
+    throw 'Upgrade installer hash does not match its updater release manifest.'
+}
+$previousDirty = Get-ObjectPropertyValue $previousUpdaterManifest 'dirtyWorktree'
+$currentDirty = Get-ObjectPropertyValue $currentUpdaterManifest 'dirtyWorktree'
+if ($null -eq $previousDirty -or [bool]$previousDirty -or $null -eq $currentDirty -or [bool]$currentDirty) {
+    throw 'Upgrade updater manifests must come from clean Git worktrees.'
+}
 $output = $OutputDirectory
 [System.IO.Directory]::CreateDirectory($output) | Out-Null
 $reportPath = [System.IO.Path]::Combine($output, 'upgrade-result.json')
 $settingsPath = Join-Path $env:APPDATA "$script:AppIdentifier\settings.json"
-$state = [ordered]@{ phase='preview'; status='not_executed'; startedAtUtc=[DateTime]::UtcNow.ToString('o'); previousInstallerSha256=$previousHash; installerSha256=$currentHash; checks=@(); recoveryCommands=@('.\scripts\windows\uninstall-smoke-test.ps1 -WhatIf') }
+$state = [ordered]@{ phase='preview'; status='not_executed'; startedAtUtc=[DateTime]::UtcNow.ToString('o'); previousVersion=$previousVersion; currentVersion=$currentVersion; identifier=[string](Get-ObjectPropertyValue $currentUpdaterManifest 'identifier'); publicKeyFingerprint=[string](Get-ObjectPropertyValue $currentUpdaterManifest 'publicKeyFingerprint'); previousInstallerSha256=$previousHash; installerSha256=$currentHash; checks=@(); recoveryCommands=@('.\scripts\windows\uninstall-smoke-test.ps1 -WhatIf') }
 
 if ($WhatIfPreference) {
     Write-Host "Upgrade preview: previous=$(Split-Path $previous -Leaf); current=$(Split-Path $current -Leaf); output=$output"
