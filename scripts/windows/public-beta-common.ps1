@@ -649,7 +649,15 @@ function Get-PublicBetaInstalledCharacterSnapshot {
 function Get-DeskPetPreservedSettingsSnapshot {
     param([Parameter(Mandatory)][string]$Path)
     if (-not [System.IO.File]::Exists($Path)) { throw 'The settings file does not exist.' }
-    $settings = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $document = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    # The native settings writer stores the application settings beneath a
+    # top-level `settings` property. Continue accepting the historical flat
+    # fixture shape so older lifecycle evidence can still be inspected.
+    $settingsProperty = $document.PSObject.Properties['settings']
+    $settings = if ($null -ne $settingsProperty) { $settingsProperty.Value } else { $document }
+    if ($null -eq $settings -or $null -eq $settings.PSObject) {
+        throw 'The settings file does not contain a readable settings object.'
+    }
     $propertyNames = @(
         'position','monitorName','scale','opacity','characterId','skinId','alwaysOnTop','autostart',
         'animationsPaused','volume','hideInFullscreen','developerPanel','interactionsEnabled','facing',

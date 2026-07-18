@@ -163,6 +163,20 @@ try {
     $beforeSnapshot = Get-DeskPetPreservedSettingsSnapshot -Path $settingsBeforePath
     $afterSnapshot = Get-DeskPetPreservedSettingsSnapshot -Path $settingsAfterPath
     Test-Equal 'Updater bookkeeping changes do not fail stable settings preservation' $beforeSnapshot.Fingerprint $afterSnapshot.Fingerprint
+
+    $wrappedSettingsPath = [System.IO.Path]::Combine($root, 'settings-wrapped.json')
+    Write-Utf8NoBom $wrappedSettingsPath ([ordered]@{
+        settings=(New-SettingsFixture -CharacterId 'qa-character' -LastCheckAt $null)
+    } | ConvertTo-Json -Depth 7)
+    $wrappedSnapshot = Get-DeskPetPreservedSettingsSnapshot -Path $wrappedSettingsPath
+    Test-Equal 'Native wrapped settings format preserves the same stable values' $beforeSnapshot.Fingerprint $wrappedSnapshot.Fingerprint
+
+    $invalidWrappedSettingsPath = [System.IO.Path]::Combine($root, 'settings-wrapped-invalid.json')
+    Write-Utf8NoBom $invalidWrappedSettingsPath ([ordered]@{ settings=[ordered]@{ scale=1.25 } } | ConvertTo-Json -Depth 4)
+    Test-Throws 'Wrapped settings still require every preserved property' {
+        Get-DeskPetPreservedSettingsSnapshot -Path $invalidWrappedSettingsPath | Out-Null
+    } 'missing the preserved property: position'
+
     Write-Utf8NoBom $settingsAfterPath ((New-SettingsFixture -CharacterId 'different-character' -LastCheckAt '2026-01-01T00:00:00Z') | ConvertTo-Json -Depth 6)
     $changedSnapshot = Get-DeskPetPreservedSettingsSnapshot -Path $settingsAfterPath
     Add-Test 'Character selection change is detected' ($beforeSnapshot.Fingerprint -ne $changedSnapshot.Fingerprint) 'Stable fingerprint must change.'
