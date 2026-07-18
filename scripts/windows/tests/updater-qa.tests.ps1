@@ -96,6 +96,21 @@ try {
     $partial = Get-DeskPetUpdaterReadiness -RepositoryRoot $script:RepositoryRoot -ReleaseDirectory $partialRelease -ExpectedVersion '0.2.0-beta.1'
     Test-Equal 'Partial updater evidence is MISCONFIGURED, not disabled' 'MISCONFIGURED' $partial.State
 
+    $historicalRelease = [System.IO.Path]::Combine($root, 'historical-release')
+    $historicalUpdater = [System.IO.Path]::Combine($historicalRelease, 'updater')
+    $historicalVersionDirectory = [System.IO.Path]::Combine($historicalUpdater, '0.1.9-beta.1')
+    [System.IO.Directory]::CreateDirectory($historicalVersionDirectory) | Out-Null
+    Write-Utf8NoBom ([System.IO.Path]::Combine($historicalUpdater, 'latest.json')) (([ordered]@{ version='0.1.9-beta.1' } | ConvertTo-Json))
+    Write-Utf8NoBom ([System.IO.Path]::Combine($historicalVersionDirectory, 'updater-release-manifest.json')) (([ordered]@{ version='0.1.9-beta.1' } | ConvertTo-Json))
+    $historicalOnly = Get-DeskPetUpdaterReadiness -RepositoryRoot $script:RepositoryRoot -ReleaseDirectory $historicalRelease -ExpectedVersion '0.2.0-beta.1'
+    Test-Equal 'Historical updater evidence does not contaminate a newer unsigned base build' 'NOT_CONFIGURED' $historicalOnly.State
+
+    $currentPartialDirectory = [System.IO.Path]::Combine($historicalUpdater, '0.2.0-beta.1')
+    [System.IO.Directory]::CreateDirectory($currentPartialDirectory) | Out-Null
+    Write-Utf8NoBom ([System.IO.Path]::Combine($currentPartialDirectory, 'orphan.sig')) 'incomplete-current-candidate'
+    $currentPartial = Get-DeskPetUpdaterReadiness -RepositoryRoot $script:RepositoryRoot -ReleaseDirectory $historicalRelease -ExpectedVersion '0.2.0-beta.1'
+    Test-Equal 'Current-version partial evidence remains MISCONFIGURED beside historical artifacts' 'MISCONFIGURED' $currentPartial.State
+
     $readyRelease = [System.IO.Path]::Combine($root, 'ready-release')
     $versionUpdaterDirectory = [System.IO.Path]::Combine($readyRelease, 'updater', $version)
     [System.IO.Directory]::CreateDirectory($versionUpdaterDirectory) | Out-Null

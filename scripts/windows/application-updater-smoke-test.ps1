@@ -113,8 +113,15 @@ try {
     $state.phase = 'validation'
     Assert-FileExists $previousInstaller 'Version A NSIS installer'
     Assert-FileExists $currentInstallerReference 'Version B NSIS installer reference'
+    # An explicitly supplied updater manifest is the release metadata assertion for
+    # this candidate. Do not also bind an unrelated historical root release manifest.
+    $versionReleaseDirectory = if ([string]::IsNullOrWhiteSpace($UpdaterManifestPath)) {
+        [System.IO.Path]::Combine($repo, 'release')
+    } else {
+        $null
+    }
     $currentVersionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo `
-        -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) `
+        -ReleaseDirectory $versionReleaseDirectory `
         -InstallerPath $currentInstallerReference -ExplicitExpectedVersion $ExpectedVersion
     Assert-DeskPetVersionContext -VersionContext $currentVersionContext
     $currentVersion = $currentVersionContext.ExpectedVersion

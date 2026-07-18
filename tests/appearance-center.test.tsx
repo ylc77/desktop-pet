@@ -1,5 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { AppearanceCenter, type AppearanceCenterApi } from "../src/components/AppearanceCenter/AppearanceCenter";
 import type { CharacterCatalogEntry, CharacterSelectionChanged } from "../src/core/character/CharacterCatalog";
 
@@ -26,6 +28,12 @@ const local: CharacterCatalogEntry = {
   errors: [],
 };
 
+const placeholder: CharacterCatalogEntry = {
+  ...bundled,
+  id: "_placeholder",
+  name: "中性占位角色",
+};
+
 const broken: CharacterCatalogEntry = {
   ...local,
   id: "broken",
@@ -41,21 +49,39 @@ afterEach(() => {
 
 function makeApi(imported = true, selectedId = "official", catalog: CharacterCatalogEntry[] = [bundled, local, broken]) {
   let changed: ((change: CharacterSelectionChanged) => void) | undefined;
+  let currentId = selectedId;
+  let currentCatalog = [...catalog];
   const api: AppearanceCenterApi = {
-    list: vi.fn(async () => catalog),
+    list: vi.fn(async () => currentCatalog),
     importPackage: vi.fn(async () => imported ? local : null),
-    remove: vi.fn(async () => undefined),
+    remove: vi.fn(async (id: string) => {
+      currentCatalog = currentCatalog.filter((entry) => entry.source !== "local" || entry.id !== id);
+    }),
     requestSelection: vi.fn(async () => undefined),
     listenSelectionChanged: vi.fn(async (handler) => {
       changed = handler;
       return () => undefined;
     }),
-    currentCharacterId: vi.fn(async () => selectedId),
+    currentCharacterId: vi.fn(async () => currentId),
   };
-  return { api, change: (payload: CharacterSelectionChanged) => changed?.(payload) };
+  return {
+    api,
+    change: (payload: CharacterSelectionChanged) => {
+      if (payload.ok) currentId = payload.id;
+      changed?.(payload);
+    },
+  };
 }
 
 describe("AppearanceCenter", () => {
+  it("protects an accepted delete transaction from window-close interruption", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/components/AppearanceCenter/AppearanceCenter.tsx"), "utf8");
+    expect(source).toContain("onCloseRequested");
+    expect(source).toContain("removalTransactionActive.current");
+    expect(source).toContain("event.preventDefault()");
+    expect(source).toContain("finishRemovalTransaction()");
+  });
+
   it("shows lazy previews, source/status metadata, and blocks broken selections", async () => {
     const { api } = makeApi();
     render(<AppearanceCenter api={api} />);
@@ -86,8 +112,8 @@ describe("AppearanceCenter", () => {
     const request = vi.mocked(api.requestSelection).mock.calls[0][0];
     change({ id: "personal", source: "local", requestId: request.requestId, ok: true });
     await waitFor(() => expect(localCard).toHaveClass("current"));
-    expect(localCard.querySelector<HTMLButtonElement>("button.danger")).toBeDisabled();
-    expect(screen.getByText("当前使用的外观不能删除")).toBeInTheDocument();
+    expect(localCard.querySelector<HTMLButtonElement>("button.danger")).toBeEnabled();
+    expect(screen.getByText("删除前会先切换到安全的内置外观")).toBeInTheDocument();
     expect(screen.getByText("外观已更换")).toBeInTheDocument();
   });
 
@@ -124,6 +150,85 @@ describe("AppearanceCenter", () => {
     await waitFor(() => expect(api.remove).toHaveBeenCalledWith("personal"));
     expect(confirm).not.toHaveBeenCalled();
     expect(await screen.findByText("本地角色已删除")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "本机私用角色" })).toHaveFocus());
+  });
+
+  it("switches through the native handshake before deleting the active local package", async () => {
+    const { api, change } = makeApi(true, "personal");
+    render(<AppearanceCenter api={api} />);
+    const localCard = (await screen.findByRole("heading", { name: "我的角色" })).closest("article")!;
+    const deleteButton = localCard.querySelector<HTMLButtonElement>("button.danger")!;
+    deleteButton.focus();
+    fireEvent.click(deleteButton);
+
+    expect(screen.getByRole("dialog", { name: "删除角色" })).toHaveTextContent("删除前会先切换到安全的内置外观");
+    fireEvent.click(screen.getByRole("button", { name: "删除角色" }));
+    expect(screen.getByRole("heading", { name: "本机私用角色" })).toHaveFocus();
+    await waitFor(() => expect(api.requestSelection).toHaveBeenCalledWith({
+      id: "official",
+      source: "bundled",
+      requestId: expect.any(String),
+      expiresAtMs: expect.any(Number),
+    }));
+    expect(api.remove).not.toHaveBeenCalled();
+
+    const request = vi.mocked(api.requestSelection).mock.calls[0][0];
+    change({ id: "official", source: "bundled", requestId: request.requestId, ok: true });
+
+    await waitFor(() => expect(api.remove).toHaveBeenCalledWith("personal"));
+    expect(await screen.findByText("本地角色已删除")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "我的角色" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "官方占位" }).closest("article")).toHaveClass("current");
+    await waitFor(() => expect(screen.getByRole("heading", { name: "本机私用角色" })).toHaveFocus());
+  });
+
+  it("prefers the bundled placeholder when deleting the active local package", async () => {
+    const { api } = makeApi(true, "personal", [bundled, placeholder, local]);
+    render(<AppearanceCenter api={api} />);
+    const localCard = (await screen.findByRole("heading", { name: "我的角色" })).closest("article")!;
+    fireEvent.click(localCard.querySelector<HTMLButtonElement>("button.danger")!);
+    fireEvent.click(screen.getByRole("button", { name: "删除角色" }));
+
+    await waitFor(() => expect(api.requestSelection).toHaveBeenCalledWith({
+      id: "_placeholder",
+      source: "bundled",
+      requestId: expect.any(String),
+      expiresAtMs: expect.any(Number),
+    }));
+  });
+
+  it("keeps the active local package and restores focus when fallback selection fails", async () => {
+    const { api, change } = makeApi(true, "personal");
+    render(<AppearanceCenter api={api} />);
+    const localCard = (await screen.findByRole("heading", { name: "我的角色" })).closest("article")!;
+    const deleteButton = localCard.querySelector<HTMLButtonElement>("button.danger")!;
+    deleteButton.focus();
+    fireEvent.click(deleteButton);
+    fireEvent.click(screen.getByRole("button", { name: "删除角色" }));
+    await waitFor(() => expect(api.requestSelection).toHaveBeenCalled());
+    const request = vi.mocked(api.requestSelection).mock.calls[0][0];
+
+    change({ id: "official", source: "bundled", requestId: request.requestId, ok: false, error: "资源验证失败" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前角色未删除：资源验证失败");
+    expect(api.remove).not.toHaveBeenCalled();
+    expect(localCard).toHaveClass("current");
+    await waitFor(() => expect(deleteButton).toHaveFocus());
+  });
+
+  it("keeps the local package and restores delete focus when removal fails", async () => {
+    const { api } = makeApi();
+    vi.mocked(api.remove).mockRejectedValueOnce(new Error("文件被占用"));
+    render(<AppearanceCenter api={api} />);
+    const localCard = (await screen.findByRole("heading", { name: "我的角色" })).closest("article")!;
+    const deleteButton = localCard.querySelector<HTMLButtonElement>("button.danger")!;
+    deleteButton.focus();
+    fireEvent.click(deleteButton);
+    fireEvent.click(screen.getByRole("button", { name: "删除角色" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("删除失败：文件被占用");
+    expect(screen.getByRole("heading", { name: "我的角色" })).toBeInTheDocument();
+    await waitFor(() => expect(deleteButton).toHaveFocus());
   });
 
   it("returns focus to delete when the confirmation is cancelled with Escape", async () => {

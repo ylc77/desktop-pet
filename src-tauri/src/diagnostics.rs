@@ -38,7 +38,10 @@ fn redact_windows_paths(value: &str) -> String {
     while index < chars.len() {
         let drive_boundary = index == 0
             || chars[index - 1].is_whitespace()
-            || matches!(chars[index - 1], '"' | '\'' | '(' | '[' | '=' | ':');
+            || matches!(
+                chars[index - 1],
+                '"' | '\'' | '(' | '[' | '{' | '<' | '=' | ':' | ',' | ';'
+            );
         let drive_path = drive_boundary
             && index + 2 < chars.len()
             && chars[index].is_ascii_alphabetic()
@@ -53,10 +56,10 @@ fn redact_windows_paths(value: &str) -> String {
                 "[local path]"
             });
             index += if unc_path { 2 } else { 3 };
-            while index < chars.len()
-                && !chars[index].is_whitespace()
-                && !matches!(chars[index], ',' | ';' | ')' | ']' | '"')
-            {
+            // Windows permits spaces and punctuation such as `)`, `]`, `,` and
+            // `;` inside file names. Once a native path is recognized, consume
+            // the remainder of the line rather than risk exposing a suffix.
+            while index < chars.len() && !matches!(chars[index], '\r' | '\n') {
                 index += 1;
             }
             continue;
@@ -64,6 +67,36 @@ fn redact_windows_paths(value: &str) -> String {
         output.push(chars[index]);
         index += 1;
     }
+    output
+}
+
+fn redact_file_urls(value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    let mut output = String::with_capacity(value.len());
+    let mut offset = 0;
+    while let Some(relative) = lower[offset..].find("file:") {
+        let start = offset + relative;
+        output.push_str(&value[offset..start]);
+        let path_start = start + "file:".len();
+        let path_tail = &value[path_start..];
+        if !path_tail.starts_with('/') && !path_tail.starts_with('\\') {
+            output.push_str(&value[start..path_start]);
+            offset = path_start;
+            continue;
+        }
+        // Local file URLs can legally contain whitespace and punctuation that
+        // often delimit ordinary prose. Redact through the line boundary so a
+        // valid path component can never reveal a trailing local-path suffix.
+        let end = path_tail
+            .char_indices()
+            .find_map(|(index, character)| {
+                matches!(character, '\r' | '\n').then_some(path_start + index)
+            })
+            .unwrap_or(value.len());
+        output.push_str("[local file URL]");
+        offset = end;
+    }
+    output.push_str(&value[offset..]);
     output
 }
 
@@ -163,7 +196,7 @@ pub fn sanitize_text(value: &str) -> String {
         .fold(value.to_string(), |current, (identity, replacement)| {
             replace_case_insensitive(&current, &identity, replacement)
         });
-    redact_urls(&redact_windows_paths(&without_identity))
+    redact_urls(&redact_windows_paths(&redact_file_urls(&without_identity)))
 }
 
 fn sanitize_json(value: &mut serde_json::Value) {
@@ -389,6 +422,22 @@ mod tests {
     #[test]
     fn diagnostic_text_removes_paths_urls_and_signing_secrets() {
         assert!(!sanitize_text("C:\\Users\\name\\file.log").contains("name"));
+        assert_eq!(
+            sanitize_text("source=file:///C:/Users/name/Program Files/private.log"),
+            "source=[local file URL]"
+        );
+        assert_eq!(
+            sanitize_text("path={C:\\Users\\name\\private.log}"),
+            "path={[local path]"
+        );
+        assert_eq!(
+            sanitize_text("source=file:///C:/temp)/Users/Alice/private.log"),
+            "source=[local file URL]"
+        );
+        assert_eq!(
+            sanitize_text("path=C:\\temp)\\Users\\Alice\\private.log"),
+            "path=[local path]"
+        );
         assert_eq!(
             sanitize_text("https://updates.example.org/latest.json?token=secret"),
             "https://updates.example.org/[redacted]"

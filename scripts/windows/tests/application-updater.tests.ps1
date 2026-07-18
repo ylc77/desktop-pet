@@ -211,10 +211,18 @@ try {
         'Version B installer is reference-only.'
     Add-Test 'Application updater state explicitly prohibits version B installer execution' `
         $applicationScriptText.Contains('currentInstallerExecutionAllowed=$false') 'Guard is present in the report schema.'
+    Add-Test 'Explicit updater metadata does not inherit an unrelated historical root release manifest' `
+        ($applicationScriptText.Contains('$versionReleaseDirectory = if ([string]::IsNullOrWhiteSpace($UpdaterManifestPath))') -and
+            $applicationScriptText.Contains('-ReleaseDirectory $versionReleaseDirectory')) `
+        'The explicitly supplied updater manifest owns candidate release metadata validation.'
     Add-Test 'Direct overlay script declares its distinct evidence type' `
         $upgradeScriptText.Contains("evidenceType='direct_installer_overlay'") 'Direct overlay cannot masquerade as the application updater.'
     Add-Test 'Dispatcher exposes an independent ApplicationUpdater mode' `
         ($dispatcherText.Contains("'ApplicationUpdater'") -and $dispatcherText.Contains('application-updater-smoke-test.ps1')) 'Independent mode and script dispatch are present.'
+    Add-Test 'ApplicationUpdater dispatcher uses the explicit updater manifest as release metadata' `
+        ($dispatcherText.Contains("if (`$Mode -eq 'ApplicationUpdater' -and -not [string]::IsNullOrWhiteSpace(`$UpdaterManifestPath))") -and
+            $dispatcherText.Contains('-ReleaseDirectory $versionReleaseDirectory')) `
+        'Historical root release metadata must not contaminate an explicitly bound updater candidate.'
     $safeEnumerationIndex = $publicBetaCommonText.IndexOf('$packageFiles = @(Get-PublicBetaSafeCharacterPackageFiles')
     $manifestReadIndex = $publicBetaCommonText.IndexOf('$manifest = Get-Content -LiteralPath $manifestPath')
     Add-Test 'Character package reparse rejection is ordered before manifest and asset reads' `

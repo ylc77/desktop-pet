@@ -1,0 +1,15 @@
+{
+  "licenseListVersion": "3.28.0",
+  "source": "https://github.com/spdx/license-list-data/tree/v3.28.0/text",
+  "files": {
+    "Apache-2.0": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+    "BSD-3-Clause": "3cf06aba3588c41c514f6946bb2d757b413ff6491647d474800f55edca75dcb4",
+    "CDLA-Permissive-2.0": "4531a67d443284d93ffed0803df5b10634aff21c3d77e381f2d48af01d875868",
+    "ISC": "f2ec607f67bb0dd3053b49835b02110d5cd0f8eb6da3aac4dc0b142a6b299be9",
+    "LLVM-exception": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+    "MIT": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+    "MPL-2.0": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+    "Unicode-3.0": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
+    "Zlib": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d"
+  }
+}

@@ -644,6 +644,13 @@ fn resolve_character_directory(root: &Path, id: &str) -> Result<PathBuf, String>
 
 fn validate_display_assets(root: &Path, manifest: &CharacterManifest) -> Result<(), String> {
     if let Some(preview) = &manifest.preview {
+        if Path::new(preview)
+            .extension()
+            .and_then(|value| value.to_str())
+            != Some("png")
+        {
+            return Err("preview 必须使用小写 .png 扩展名".into());
+        }
         let path = resolve_existing_file(root, preview)?;
         let info = inspect_png(&path, 8 * 1024 * 1024)?;
         if info.width < 64 || info.height < 64 || info.width > 2_048 || info.height > 2_048 {
@@ -651,6 +658,9 @@ fn validate_display_assets(root: &Path, manifest: &CharacterManifest) -> Result<
         }
     }
     if let Some(icon) = &manifest.icon {
+        if Path::new(icon).extension().and_then(|value| value.to_str()) != Some("png") {
+            return Err("icon 必须使用小写 .png 扩展名".into());
+        }
         let path = resolve_existing_file(root, icon)?;
         let info = inspect_png(&path, 2 * 1024 * 1024)?;
         if info.width < 32
@@ -660,6 +670,142 @@ fn validate_display_assets(root: &Path, manifest: &CharacterManifest) -> Result<
             || info.width != info.height
         {
             return Err("icon 必须为 32-512 的正方形 PNG".into());
+        }
+    }
+    Ok(())
+}
+
+fn declared_package_files(
+    manifest: &CharacterManifest,
+    frames: &HashMap<String, Vec<String>>,
+) -> Result<HashSet<String>, String> {
+    let mut allowed = HashSet::from([
+        "manifest.json".to_string(),
+        "frames.json".to_string(),
+        "metadata/source.md".to_string(),
+        "metadata/license.md".to_string(),
+    ]);
+    for value in [manifest.preview.as_ref(), manifest.icon.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        safe_relative_path(value)?;
+        allowed.insert(value.to_ascii_lowercase());
+    }
+    for relative in frames.values().flatten() {
+        safe_relative_path(relative)?;
+        allowed.insert(relative.to_ascii_lowercase());
+    }
+    if let Some(skins) = &manifest.skins {
+        for id in skins.keys() {
+            let relative = format!("skins/{id}/skin.json");
+            safe_relative_path(&relative)
+                .map_err(|error| format!("skins.{id} 路径无效: {error}"))?;
+            allowed.insert(relative.to_ascii_lowercase());
+        }
+    }
+    Ok(allowed)
+}
+
+fn prohibited_package_file(relative: &str) -> bool {
+    let extension = Path::new(relative)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "exe"
+            | "dll"
+            | "com"
+            | "scr"
+            | "msi"
+            | "msp"
+            | "bat"
+            | "cmd"
+            | "ps1"
+            | "psm1"
+            | "psd1"
+            | "vbs"
+            | "vbe"
+            | "js"
+            | "mjs"
+            | "cjs"
+            | "html"
+            | "htm"
+            | "hta"
+            | "svg"
+            | "jar"
+            | "lnk"
+            | "url"
+            | "reg"
+            | "chm"
+    )
+}
+
+fn package_relative_key(root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "角色包文件越出角色目录".to_string())?;
+    let mut components = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(value) = component else {
+            return Err("角色包文件路径包含无效段".into());
+        };
+        components.push(
+            value
+                .to_str()
+                .ok_or_else(|| "角色包文件名不是有效 Unicode".to_string())?,
+        );
+    }
+    if components.is_empty() {
+        return Err("角色包文件路径为空".into());
+    }
+    Ok(components.join("/"))
+}
+
+fn validate_package_file_set(
+    root: &Path,
+    manifest: &CharacterManifest,
+    frames: &HashMap<String, Vec<String>>,
+) -> Result<(), String> {
+    let allowed = declared_package_files(manifest, frames)?;
+    let canonical_root = fs::canonicalize(root).map_err(|_| "角色目录无法解析".to_string())?;
+    let mut directories = vec![root.to_path_buf()];
+    let mut files = 0_usize;
+    while let Some(directory) = directories.pop() {
+        let entries = fs::read_dir(&directory).map_err(|_| "角色包目录无法读取".to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|_| "角色包目录条目无法读取".to_string())?;
+            let path = entry.path();
+            let metadata =
+                fs::symlink_metadata(&path).map_err(|_| "角色包文件属性无法读取".to_string())?;
+            if metadata.file_type().is_symlink() {
+                return Err("角色包包含符号链接或重解析点".into());
+            }
+            if metadata.is_dir() {
+                let canonical =
+                    fs::canonicalize(&path).map_err(|_| "角色包目录无法解析".to_string())?;
+                if !canonical.starts_with(&canonical_root) {
+                    return Err("角色包目录越出安全根目录".into());
+                }
+                directories.push(path);
+                continue;
+            }
+            if !metadata.is_file() {
+                return Err("角色包包含非常规文件".into());
+            }
+            files += 1;
+            if files > MAX_ENTRIES {
+                return Err("角色包文件数量超过上限".into());
+            }
+            let relative = package_relative_key(root, &path)?;
+            if prohibited_package_file(&relative) {
+                return Err(format!("角色包包含禁止的可执行或脚本文件: {relative}"));
+            }
+            if !allowed.contains(&relative.to_ascii_lowercase()) {
+                return Err(format!("角色包包含未声明文件: {relative}"));
+            }
         }
     }
     Ok(())
@@ -744,6 +890,7 @@ fn validate_package(root: &Path, decode_frames: bool) -> Result<ValidatedPackage
         .map_err(|error| format!("frames.json 字段无效: {error}"))?;
     validate_display_assets(root, &manifest)?;
     validate_frames(root, &manifest, &frame_index.animations, decode_frames)?;
+    validate_package_file_set(root, &manifest, &frame_index.animations)?;
     Ok(ValidatedPackage {
         manifest_value,
         manifest,
@@ -1747,26 +1894,36 @@ pub fn remove_installed_character<R: Runtime>(
 pub fn show_appearance_window_for<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("appearance") {
         window
+            .unminimize()
+            .map_err(|error| format!("无法恢复外观中心: {error}"))?;
+        window
             .show()
             .map_err(|error| format!("无法显示外观中心: {error}"))?;
+        crate::fit_auxiliary_window_to_current_work_area(&window, false)?;
         window
             .set_focus()
             .map_err(|error| format!("无法聚焦外观中心: {error}"))?;
         return Ok(());
     }
-    WebviewWindowBuilder::new(app, "appearance", WebviewUrl::App("index.html".into()))
+    let layout = crate::auxiliary_window_layout_for_app(app, 960.0, 720.0);
+    let window = WebviewWindowBuilder::new(app, "appearance", WebviewUrl::App("index.html".into()))
         .title("七酱桌宠 · 外观中心")
-        .inner_size(960.0, 720.0)
-        .min_inner_size(560.0, 360.0)
+        .inner_size(layout.width, layout.height)
+        .min_inner_size(layout.min_width, layout.min_height)
         .resizable(true)
         .decorations(true)
         .transparent(false)
         .always_on_top(false)
         .skip_taskbar(false)
+        .visible(false)
         .center()
         .build()
-        .map(|_| ())
-        .map_err(|error| format!("无法创建外观中心: {error}"))
+        .map_err(|error| format!("无法创建外观中心: {error}"))?;
+    crate::fit_new_auxiliary_window_to_preferred_work_area(app, &window)?;
+    window
+        .show()
+        .map_err(|error| format!("无法显示外观中心: {error}"))?;
+    Ok(())
 }
 
 // Dispatch WebView2 construction away from the IPC event thread. Keeping this
@@ -2169,6 +2326,36 @@ mod tests {
             assert!(install_package_at(&root, &package, &[]).is_err());
             assert!(!root.join("safe_character").exists());
             assert!(!base.join("escape.txt").exists());
+            fs::remove_dir_all(base).unwrap();
+        }
+    }
+
+    #[test]
+    fn executable_script_html_and_undeclared_files_are_rejected() {
+        for (label, relative, expected) in [
+            ("executable", "payload/runner.exe", "禁止的可执行或脚本文件"),
+            ("library", "payload/helper.dll", "禁止的可执行或脚本文件"),
+            ("script", "payload/install.ps1", "禁止的可执行或脚本文件"),
+            ("html", "payload/preview.html", "禁止的可执行或脚本文件"),
+            ("undeclared", "notes.txt", "未声明文件"),
+        ] {
+            let base = temporary_directory(label);
+            let root = base.join("characters");
+            fs::create_dir_all(&base).unwrap();
+            let package = base.join("invalid.qipet");
+            write_package(
+                &package,
+                "safe_character",
+                "1.0.0",
+                None,
+                Some((relative, b"not allowed", None)),
+            );
+            let error = match install_package_at(&root, &package, &[]) {
+                Err(error) => error,
+                Ok(_) => panic!("{label}: unsafe package was installed"),
+            };
+            assert!(error.contains(expected), "{label}: {error}");
+            assert!(!root.join("safe_character").exists());
             fs::remove_dir_all(base).unwrap();
         }
     }

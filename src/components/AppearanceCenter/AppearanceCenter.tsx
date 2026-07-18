@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   importCharacterPackage,
   loadCharacterCatalog,
@@ -77,8 +78,9 @@ function CharacterPreview({ entry }: { entry: CharacterCatalogEntry }) {
   return <img className="appearance-preview" src={previewUrl} alt={`${entry.name} 预览`} loading="lazy" decoding="async" onError={() => setFailedUrl(previewUrl)} />;
 }
 
-function ConfirmRemoveDialog({ entry, onCancel, onConfirm }: {
+function ConfirmRemoveDialog({ entry, current, onCancel, onConfirm }: {
   entry: CharacterCatalogEntry;
+  current: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -121,7 +123,10 @@ function ConfirmRemoveDialog({ entry, onCancel, onConfirm }: {
         }}
       >
         <h2 id="appearance-remove-title">删除角色</h2>
-        <p id="appearance-remove-description">确定从本机删除“{entry.name}”吗？删除后需要重新导入才能再次使用。</p>
+        <p id="appearance-remove-description">
+          确定从本机删除“{entry.name}”吗？
+          {current ? "当前正在使用此外观，删除前会先切换到安全的内置外观。" : "删除后需要重新导入才能再次使用。"}
+        </p>
         <div className="appearance-card-actions">
           <button ref={cancelRef} type="button" onClick={onCancel}>取消</button>
           <button type="button" className="danger" onClick={onConfirm}>删除角色</button>
@@ -133,6 +138,11 @@ function ConfirmRemoveDialog({ entry, onCancel, onConfirm }: {
 
 const DEFAULT_SELECTION_TIMEOUT_MS = 120_000;
 const SELECTION_REQUEST_LIFETIME_MS = 110_000;
+
+interface PendingRemoval {
+  entry: CharacterCatalogEntry;
+  current: boolean;
+}
 
 export function AppearanceCenter({
   api = defaultApi,
@@ -146,10 +156,35 @@ export function AppearanceCenter({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "info" | "error"; text: string } | null>(null);
-  const [pendingRemoval, setPendingRemoval] = useState<CharacterCatalogEntry | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const pendingRequestId = useRef<string | null>(null);
+  const removalAfterSelection = useRef<CharacterCatalogEntry | null>(null);
   const selectionTimeout = useRef<number | null>(null);
   const removalTrigger = useRef<HTMLElement | null>(null);
+  const localSectionHeading = useRef<HTMLHeadingElement>(null);
+  const removalTransactionActive = useRef(false);
+  const closeAfterRemoval = useRef(false);
+
+  const finishRemovalTransaction = useCallback(() => {
+    removalTransactionActive.current = false;
+    if (!closeAfterRemoval.current || !isTauriRuntime()) return;
+    closeAfterRemoval.current = false;
+    void getCurrentWindow().close().catch((error) => log("warn", "删除流程结束后关闭外观中心失败", error));
+  }, []);
+
+  const restoreRemovalFocus = useCallback(() => {
+    const target = removalTrigger.current;
+    removalTrigger.current = null;
+    window.setTimeout(() => {
+      if (target?.isConnected && !(target instanceof HTMLButtonElement && target.disabled)) target.focus();
+      else localSectionHeading.current?.focus();
+    }, 0);
+  }, []);
+
+  const focusAfterRemoval = useCallback(() => {
+    removalTrigger.current = null;
+    window.setTimeout(() => localSectionHeading.current?.focus(), 0);
+  }, []);
 
   const clearSelectionTimeout = useCallback(() => {
     if (selectionTimeout.current !== null) window.clearTimeout(selectionTimeout.current);
@@ -163,9 +198,20 @@ export function AppearanceCenter({
       pendingRequestId.current = null;
       selectionTimeout.current = null;
       setBusy(null);
-      setFeedback({ kind: "error", text: "外观切换等待超时，已保留原外观。请重试或重新打开外观中心。" });
+      const removal = removalAfterSelection.current;
+      removalAfterSelection.current = null;
+      setFeedback({
+        kind: "error",
+        text: removal
+          ? "删除前切换内置外观超时，当前角色未删除。请重试或重新打开外观中心。"
+          : "外观切换等待超时，已保留原外观。请重试或重新打开外观中心。",
+      });
+      if (removal) {
+        restoreRemovalFocus();
+        finishRemovalTransaction();
+      }
     }, selectionTimeoutMs);
-  }, [clearSelectionTimeout, selectionTimeoutMs]);
+  }, [clearSelectionTimeout, finishRemovalTransaction, restoreRemovalFocus, selectionTimeoutMs]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -182,6 +228,40 @@ export function AppearanceCenter({
     }
   }, [api]);
 
+  const completeRemoval = useCallback(async (entry: CharacterCatalogEntry) => {
+    try {
+      await api.remove(entry.id);
+      await refresh();
+      setFeedback({ kind: "info", text: "本地角色已删除" });
+      focusAfterRemoval();
+    } catch (error) {
+      setFeedback({ kind: "error", text: `删除失败：${messageOf(error)}` });
+      restoreRemovalFocus();
+    } finally {
+      setBusy(null);
+      finishRemovalTransaction();
+    }
+  }, [api, finishRemovalTransaction, focusAfterRemoval, refresh, restoreRemovalFocus]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow().onCloseRequested((event) => {
+      if (!removalTransactionActive.current) return;
+      event.preventDefault();
+      closeAfterRemoval.current = true;
+      setFeedback({ kind: "info", text: "正在完成已确认的角色删除，完成后会关闭外观中心…" });
+    }).then((dispose) => {
+      if (disposed) dispose();
+      else unlisten = dispose;
+    }).catch((error) => log("warn", "注册外观中心关闭保护失败", error));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     void refresh(controller.signal);
@@ -191,11 +271,27 @@ export function AppearanceCenter({
       if (!pendingRequestId.current || change.requestId !== pendingRequestId.current) return;
       clearSelectionTimeout();
       pendingRequestId.current = null;
+      const removal = removalAfterSelection.current;
+      removalAfterSelection.current = null;
       if (change.ok) {
         setCurrentId(change.id);
+        if (removal) {
+          setFeedback({ kind: "info", text: "已切换到安全的内置外观，正在删除本地角色…" });
+          void completeRemoval(removal);
+          return;
+        }
         setFeedback({ kind: "info", text: "外观已更换" });
       } else {
-        setFeedback({ kind: "error", text: `切换失败，已保留原外观：${change.error ?? "未知错误"}` });
+        setFeedback({
+          kind: "error",
+          text: removal
+            ? `删除前无法切换到内置外观，当前角色未删除：${change.error ?? "未知错误"}`
+            : `切换失败，已保留原外观：${change.error ?? "未知错误"}`,
+        });
+        if (removal) {
+          restoreRemovalFocus();
+          finishRemovalTransaction();
+        }
       }
       setBusy(null);
     }).then((dispose) => {
@@ -206,9 +302,12 @@ export function AppearanceCenter({
       disposed = true;
       controller.abort();
       clearSelectionTimeout();
+      removalTransactionActive.current = false;
+      closeAfterRemoval.current = false;
+      removalAfterSelection.current = null;
       unlisten?.();
     };
-  }, [api, clearSelectionTimeout, refresh]);
+  }, [api, clearSelectionTimeout, completeRemoval, finishRemovalTransaction, refresh, restoreRemovalFocus]);
 
   const importPackage = async () => {
     setBusy("import");
@@ -228,6 +327,7 @@ export function AppearanceCenter({
         const requestId = createRequestId();
         const expiresAtMs = Date.now() + SELECTION_REQUEST_LIFETIME_MS;
         pendingRequestId.current = requestId;
+        removalAfterSelection.current = null;
         armSelectionTimeout(requestId);
         setBusy(`select:local:${imported.id}`);
         setFeedback({ kind: "info", text: `角色包已更新，正在验证并重新加载 ${imported.name}…` });
@@ -249,6 +349,7 @@ export function AppearanceCenter({
     const requestId = createRequestId();
     const expiresAtMs = Date.now() + SELECTION_REQUEST_LIFETIME_MS;
     pendingRequestId.current = requestId;
+    removalAfterSelection.current = null;
     armSelectionTimeout(requestId);
     setBusy(`select:${entry.source}:${entry.id}`);
     setFeedback({ kind: "info", text: `正在验证 ${entry.name} 的全部资源…` });
@@ -264,12 +365,6 @@ export function AppearanceCenter({
 
   const activeEntry = entries.find((entry) => entry.id === currentId && entry.valid);
 
-  const restoreRemovalFocus = () => {
-    const target = removalTrigger.current;
-    removalTrigger.current = null;
-    window.setTimeout(() => target?.focus(), 0);
-  };
-
   const cancelRemoval = () => {
     setPendingRemoval(null);
     restoreRemovalFocus();
@@ -277,24 +372,49 @@ export function AppearanceCenter({
 
   const requestRemoval = (entry: CharacterCatalogEntry) => {
     const current = entry.id === activeEntry?.id && entry.source === activeEntry.source;
-    if (current) return;
     removalTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setPendingRemoval(entry);
+    setPendingRemoval({ entry, current });
   };
 
   const remove = async (entry: CharacterCatalogEntry) => {
     setPendingRemoval(null);
-    removalTrigger.current = null;
+    localSectionHeading.current?.focus();
+    removalTransactionActive.current = true;
     setBusy(`remove:${entry.id}`);
     setFeedback(null);
-    try {
-      await api.remove(entry.id);
-      await refresh();
-      setFeedback({ kind: "info", text: "本地角色已删除" });
-    } catch (error) {
-      setFeedback({ kind: "error", text: `删除失败：${messageOf(error)}` });
-    } finally {
+    const current = entry.id === activeEntry?.id && entry.source === activeEntry.source;
+    if (!current) {
+      await completeRemoval(entry);
+      return;
+    }
+
+    const validBundled = entries.filter((candidate) => candidate.source === "bundled" && candidate.valid);
+    const fallback = validBundled.find((candidate) => candidate.id === "_placeholder") ?? validBundled[0];
+    if (!fallback) {
+      setFeedback({ kind: "error", text: "没有可用的内置外观，当前角色未删除。请先修复内置角色资源。" });
       setBusy(null);
+      restoreRemovalFocus();
+      finishRemovalTransaction();
+      return;
+    }
+
+    const requestId = createRequestId();
+    const expiresAtMs = Date.now() + SELECTION_REQUEST_LIFETIME_MS;
+    pendingRequestId.current = requestId;
+    removalAfterSelection.current = entry;
+    armSelectionTimeout(requestId);
+    setBusy(`remove-switch:${entry.id}`);
+    setFeedback({ kind: "info", text: `正在切换到 ${fallback.name}，确认安全后再删除…` });
+    try {
+      await api.requestSelection({ id: fallback.id, source: "bundled", requestId, expiresAtMs });
+    } catch (error) {
+      clearSelectionTimeout();
+      pendingRequestId.current = null;
+      removalAfterSelection.current = null;
+      setBusy(null);
+      setFeedback({ kind: "error", text: `删除前无法请求切换到内置外观，当前角色未删除：${messageOf(error)}` });
+      restoreRemovalFocus();
+      finishRemovalTransaction();
     }
   };
 
@@ -316,9 +436,9 @@ export function AppearanceCenter({
           {!entry.valid && <div className="appearance-errors"><strong>资源损坏</strong>{entry.errors.map((error, index) => <p key={`${error}:${index}`}>{error}</p>)}</div>}
           <div className="appearance-card-actions">
             <button type="button" className="primary" disabled={!entry.valid || current || interactionBlocked} onClick={() => void select(entry)}>{selectBusy ? "正在验证…" : current ? "使用中" : "使用此外观"}</button>
-            {entry.source === "local" && <button type="button" className="danger" disabled={current || interactionBlocked} aria-describedby={current ? deleteDescriptionId : undefined} onClick={() => requestRemoval(entry)}>删除</button>}
+            {entry.source === "local" && <button type="button" className="danger" disabled={interactionBlocked} aria-describedby={current ? deleteDescriptionId : undefined} onClick={() => requestRemoval(entry)}>删除</button>}
           </div>
-          {entry.source === "local" && current && <p id={deleteDescriptionId} className="appearance-delete-note">当前使用的外观不能删除</p>}
+          {entry.source === "local" && current && <p id={deleteDescriptionId} className="appearance-delete-note">删除前会先切换到安全的内置外观</p>}
         </div>
       </article>
     );
@@ -358,7 +478,7 @@ export function AppearanceCenter({
             </section>
 
             <section aria-labelledby="appearance-local-heading">
-              <h2 id="appearance-local-heading">本机私用角色</h2>
+              <h2 id="appearance-local-heading" ref={localSectionHeading} tabIndex={-1}>本机私用角色</h2>
               {localEntries.length > 0
                 ? <div className="appearance-grid" aria-label="本机私用角色">{localEntries.map(renderEntry)}</div>
                 : <div className="appearance-empty"><p>尚无本机私用角色。</p><button type="button" className="primary" onClick={() => void importPackage()} disabled={interactionBlocked}>导入 .qipet</button></div>}
@@ -366,7 +486,7 @@ export function AppearanceCenter({
           </div>
         )}
       </main>
-      {pendingRemoval && <ConfirmRemoveDialog entry={pendingRemoval} onCancel={cancelRemoval} onConfirm={() => void remove(pendingRemoval)} />}
+      {pendingRemoval && <ConfirmRemoveDialog entry={pendingRemoval.entry} current={pendingRemoval.current} onCancel={cancelRemoval} onConfirm={() => void remove(pendingRemoval.entry)} />}
     </>
   );
 }

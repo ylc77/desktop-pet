@@ -6,7 +6,6 @@ $ErrorActionPreference = 'Stop'
 $windowsRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..'))
 $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($windowsRoot, '..', '..'))
 . ([System.IO.Path]::Combine($windowsRoot, 'common.ps1'))
-$releaseManifest = Get-Content -LiteralPath ([System.IO.Path]::Combine($repo, 'release', 'release-manifest.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
 $root = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'desk-pet-public-beta-test-' + [guid]::NewGuid().ToString('N'))
 $results = @()
 function Add-Test([string]$Name, [object]$Expected, [object]$Actual) {
@@ -26,14 +25,70 @@ function New-PassingApplicationUpdaterChecks {
 
 try {
     [System.IO.Directory]::CreateDirectory($root) | Out-Null
-    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
+    $fixtureRelease = [System.IO.Path]::Combine($root, 'candidate-release')
+    $fixtureUpdaterRoot = [System.IO.Path]::Combine($fixtureRelease, 'updater')
+    $version = [string]$script:TauriConfig.version
+    $headCommit = (& git -C $repo rev-parse HEAD).Trim()
+    $installerName = "$script:ProductName`_$version`_x64-setup.exe"
+    $installerPath = [System.IO.Path]::Combine($fixtureRelease, $installerName)
+    $updaterVersionRoot = [System.IO.Path]::Combine($fixtureUpdaterRoot, $version)
+    [System.IO.Directory]::CreateDirectory($updaterVersionRoot) | Out-Null
+    [System.IO.File]::WriteAllBytes($installerPath, [byte[]](1, 2, 3, 4))
+    $installerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
+    $releaseManifest = [pscustomobject][ordered]@{
+        version=$version; gitCommit=$headCommit; dirtyWorktree=$false
+        installerFile=$installerName; versionedInstallerFile=$installerName
+        installerSizeBytes=(Get-Item -LiteralPath $installerPath).Length; sha256=$installerHash
+    }
+    [System.IO.File]::WriteAllText(
+        ([System.IO.Path]::Combine($fixtureRelease, 'release-manifest.json')),
+        ($releaseManifest | ConvertTo-Json -Depth 5),
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+
+    $artifactName = "qijiang-desktop-pet_$version`_x64-setup.exe"
+    $artifactPath = [System.IO.Path]::Combine($updaterVersionRoot, $artifactName)
+    [System.IO.File]::WriteAllBytes($artifactPath, [byte[]](5, 6, 7, 8))
+    $signatureName = "$artifactName.sig"
+    $signaturePath = [System.IO.Path]::Combine($updaterVersionRoot, $signatureName)
+    $signatureText = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('public-beta-audit-fixture-signature'))
+    [System.IO.File]::WriteAllText($signaturePath, $signatureText, (New-Object System.Text.UTF8Encoding($false)))
+    $downloadUrl = "https://updates.example.invalid/$([Uri]::EscapeDataString($artifactName))"
+    $latest = [ordered]@{
+        version=$version
+        platforms=[ordered]@{
+            'windows-x86_64'=[ordered]@{url=$downloadUrl;signature=$signatureText;size=(Get-Item -LiteralPath $artifactPath).Length}
+        }
+    }
+    $latestPath = [System.IO.Path]::Combine($fixtureUpdaterRoot, 'latest.json')
+    [System.IO.File]::WriteAllText($latestPath, ($latest | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    $updaterManifest = [ordered]@{
+        schemaVersion=1; version=$version; currentVersion='0.1.2-beta.2'; identifier=$script:AppIdentifier
+        publicKeyFingerprint=('A' * 64); endpoint='https://updates.example.invalid/latest.json'; installMode='passive'; platform='windows-x86_64'
+        artifactFile=$artifactName; signatureFile=$signatureName
+        artifactSha256=(Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash
+        signatureSha256=(Get-FileHash -LiteralPath $signaturePath -Algorithm SHA256).Hash
+        latestJsonSha256=(Get-FileHash -LiteralPath $latestPath -Algorithm SHA256).Hash
+        downloadUrl=$downloadUrl; gitCommit=$headCommit; dirtyWorktree=$false
+    }
+    [System.IO.File]::WriteAllText(
+        ([System.IO.Path]::Combine($updaterVersionRoot, 'updater-release-manifest.json')),
+        ($updaterManifest | ConvertTo-Json -Depth 6),
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+    $auditScript = [System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')
+    $auditParameters = @{
+        ResultsRoot=$root; OutputDirectory=$root; ReleaseDirectory=$fixtureRelease; SkipLegacyDiscovery=$true
+    }
+
+    & $auditScript @auditParameters
     $emptyAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
     Add-Test 'Configured updater remains blocked without production public-key verification' 'BLOCKED' $emptyAudit.gate
     Add-Test 'Updater status is explicitly READY' 'READY' $emptyAudit.updaterStatus
     $automaticRequirement = @($emptyAudit.requirements | Where-Object id -eq 'automatic-release')[0]
     Add-Test 'Missing environment evidence is not passed' 'not_executed' ([string]$automaticRequirement.status)
 
-    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery -AcceptUnsignedRisk
+    & $auditScript @auditParameters -AcceptUnsignedRisk
     $acceptedRiskAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
     Add-Test 'AcceptUnsignedRisk cannot bypass missing updater key verification' 'BLOCKED' $acceptedRiskAudit.gate
 
@@ -46,7 +101,7 @@ try {
     $directOverlayDirectory = [System.IO.Path]::Combine($root, 'direct-overlay')
     [System.IO.Directory]::CreateDirectory($directOverlayDirectory) | Out-Null
     $directOverlayEnvironment | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ([System.IO.Path]::Combine($directOverlayDirectory, 'environment-result.json')) -Encoding UTF8
-    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
+    & $auditScript @auditParameters
     $directOverlayAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
     $directOverlayRequirement = @($directOverlayAudit.requirements | Where-Object id -eq 'application-updater-e2e')[0]
     Add-Test 'Direct installer overlay cannot satisfy application updater E2E' 'not_executed' ([string]$directOverlayRequirement.status)
@@ -62,7 +117,7 @@ try {
     $environmentDirectory = [System.IO.Path]::Combine($root, 'synthetic')
     [System.IO.Directory]::CreateDirectory($environmentDirectory) | Out-Null
     $environment | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ([System.IO.Path]::Combine($environmentDirectory, 'environment-result.json')) -Encoding UTF8
-    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
+    & $auditScript @auditParameters
     $summaryOnlyAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
     $summaryOnlyRequirement = @($summaryOnlyAudit.requirements | Where-Object id -eq 'application-updater-e2e')[0]
     Add-Test 'Synthetic application updater summary without raw evidence is rejected' 'blocked' ([string]$summaryOnlyRequirement.status)
@@ -93,7 +148,7 @@ try {
     $environment['sourceReportFile'] = [System.IO.Path]::Combine('raw','application-updater-result.json')
     $environment['sourceReportSha256'] = (Get-FileHash -LiteralPath $rawPath -Algorithm SHA256).Hash
     $environment | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath ([System.IO.Path]::Combine($environmentDirectory, 'environment-result.json')) -Encoding UTF8
-    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
+    & $auditScript @auditParameters
     $minimalRawAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
     $minimalRawRequirement = @($minimalRawAudit.requirements | Where-Object id -eq 'application-updater-e2e')[0]
     Add-Test 'Minimal synthetic raw report cannot satisfy application updater E2E' 'blocked' ([string]$minimalRawRequirement.status)
@@ -101,7 +156,7 @@ try {
     [System.IO.File]::WriteAllText($rawPath, ($rawEvidence | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
     $environment['sourceReportSha256'] = (Get-FileHash -LiteralPath $rawPath -Algorithm SHA256).Hash
     $environment | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath ([System.IO.Path]::Combine($environmentDirectory, 'environment-result.json')) -Encoding UTF8
-    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
+    & $auditScript @auditParameters
     $completeAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
     Add-Test 'Complete evidence remains blocked without updater key verification' 'BLOCKED' $completeAudit.gate
     Add-Test 'Matching commit, version and hash evidence is accepted' $true ([bool]$completeAudit.environmentResults[0].evidenceValid)
@@ -122,13 +177,13 @@ try {
     $olderDirectory = [System.IO.Path]::Combine($root, 'synthetic-old')
     [System.IO.Directory]::CreateDirectory($olderDirectory) | Out-Null
     $olderEnvironment | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ([System.IO.Path]::Combine($olderDirectory, 'environment-result.json')) -Encoding UTF8
-    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
+    & $auditScript @auditParameters
     $deduplicatedAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
     Add-Test 'Latest result replaces older evidence from the same environment' 'BLOCKED' $deduplicatedAudit.gate
 
     $environment.checks[0].status = 'failed'
     $environment | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath ([System.IO.Path]::Combine($environmentDirectory, 'environment-result.json')) -Encoding UTF8
-    & ([System.IO.Path]::Combine($windowsRoot, 'audit-public-beta-readiness.ps1')) -ResultsRoot $root -OutputDirectory $root -SkipLegacyDiscovery
+    & $auditScript @auditParameters
     $failedAudit = Get-Content -LiteralPath ([System.IO.Path]::Combine($root, 'public-beta-readiness.json')) -Raw -Encoding UTF8 | ConvertFrom-Json
     Add-Test 'Updater key-verification block is not bypassed by other failed evidence' 'BLOCKED' $failedAudit.gate
 

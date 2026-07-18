@@ -23,11 +23,28 @@ describe("application rebranding", () => {
 
   it("keeps the application version consistent across JavaScript, Tauri, and Cargo", () => {
     const cargo = readFileSync(resolve(root, "src-tauri/Cargo.toml"), "utf8");
+    const cargoLock = readFileSync(resolve(root, "src-tauri/Cargo.lock"), "utf8");
+    const packageLock = JSON.parse(readFileSync(resolve(root, "package-lock.json"), "utf8"));
     const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+    const cargoLockVersion = cargoLock.match(/\[\[package\]\]\r?\nname = "desk-pet-framework"\r?\nversion = "([^"]+)"/)?.[1];
     const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+    expect(packageJson.version).toBe("0.1.2-beta.3");
     expect(packageJson.version).toMatch(semver);
+    expect(packageLock.version).toBe(packageJson.version);
+    expect(packageLock.packages[""].version).toBe(packageJson.version);
+    expect(packageLock.packages[""].license).toBe("UNLICENSED");
     expect(config.version).toBe(packageJson.version);
     expect(cargoVersion).toBe(packageJson.version);
+    expect(cargoLockVersion).toBe(packageJson.version);
+    for (const file of [
+      "docs/PRIVACY.md",
+      "docs/PUBLIC_BETA_CHECKLIST.md",
+      "docs/PUBLIC_BETA_RELEASE_NOTES.md",
+      "docs/SIGNING_AND_SMARTSCREEN.md",
+      "docs/WINDOWS_CODE_SIGNING_TODO.md",
+    ]) {
+      expect(readFileSync(resolve(root, file), "utf8"), file).toContain(packageJson.version);
+    }
   });
 
   it("bundles all required Windows icon resources", () => {

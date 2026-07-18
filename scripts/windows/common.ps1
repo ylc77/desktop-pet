@@ -298,9 +298,23 @@ function Get-DeskPetUpdaterReadiness {
     }
     $latestPath = [System.IO.Path]::Combine($updaterRoot, 'latest.json')
     $manifestPath = Get-DeskPetUpdaterManifestPath -ReleaseDirectory $ReleaseDirectory -Version $ExpectedVersion
-    $hasAnyReleaseEvidence = [System.IO.File]::Exists($latestPath) -or
-        -not [string]::IsNullOrWhiteSpace($manifestPath) -or
-        ([System.IO.Directory]::Exists($updaterRoot) -and @(Get-ChildItem -LiteralPath $updaterRoot -File -Recurse -ErrorAction SilentlyContinue).Count -gt 0)
+    $latest = $null
+    $latestParseFailed = $false
+    if ([System.IO.File]::Exists($latestPath)) {
+        try { $latest = Get-Content -LiteralPath $latestPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+        catch { $latestParseFailed = $true }
+    }
+    $latestVersion = [string](Get-ObjectPropertyValue $latest 'version')
+    $expectedVersionDirectory = [System.IO.Path]::Combine($updaterRoot, $ExpectedVersion)
+    $hasExpectedVersionFiles = [System.IO.Directory]::Exists($expectedVersionDirectory) -and
+        @(Get-ChildItem -LiteralPath $expectedVersionDirectory -File -Recurse -ErrorAction SilentlyContinue).Count -gt 0
+    $topLevelLatestTargetsExpectedVersion = [System.IO.File]::Exists($latestPath) -and
+        ($latestParseFailed -or [string]::IsNullOrWhiteSpace($latestVersion) -or $latestVersion -eq $ExpectedVersion)
+    # Historical signed candidates may intentionally remain under release/updater.
+    # They are not evidence for the current base build unless the current version
+    # has files of its own or the top-level latest.json targets this version.
+    $hasAnyReleaseEvidence = -not [string]::IsNullOrWhiteSpace($manifestPath) -or
+        $hasExpectedVersionFiles -or $topLevelLatestTargetsExpectedVersion
     $checks = @()
     if (-not $hasAnyReleaseEvidence) {
         return [pscustomobject]@{
@@ -339,11 +353,6 @@ function Get-DeskPetUpdaterReadiness {
     $artifactPath = if ([string]::IsNullOrWhiteSpace($artifactFile)) { $null } else { [System.IO.Path]::Combine($manifestDirectory, $artifactFile) }
     $signaturePath = if ([string]::IsNullOrWhiteSpace($signatureFile)) { $null } else { [System.IO.Path]::Combine($manifestDirectory, $signatureFile) }
 
-    $latest = $null
-    if ([System.IO.File]::Exists($latestPath)) {
-        try { $latest = Get-Content -LiteralPath $latestPath -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $latest = $null }
-    }
-    $latestVersion = [string](Get-ObjectPropertyValue $latest 'version')
     $platforms = Get-ObjectPropertyValue $latest 'platforms'
     $windowsPlatform = $null
     if ($null -ne $platforms) {

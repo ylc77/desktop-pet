@@ -77,4 +77,43 @@ describe("release engineering safeguards", () => {
     expect(settings).toContain("import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEVELOPER_TOOLS === \"true\"");
     expect(app).toContain("DEVELOPER_TOOLS_ALLOWED && settings.developerPanel");
   });
+
+  it("ships a proprietary source license, third-party notices, and auditable bundled-asset rights", () => {
+    const license = readFileSync(resolve(root, "LICENSE"), "utf8");
+    const notices = readFileSync(resolve(root, "THIRD_PARTY_NOTICES.md"), "utf8");
+    const aggregate = readFileSync(resolve(root, "THIRD_PARTY_LICENSES.txt"), "utf8");
+    const rights = readFileSync(resolve(root, "docs/ASSET_RIGHTS.md"), "utf8");
+    const placeholderLicense = readFileSync(resolve(root, "public/characters/_placeholder/metadata/license.md"), "utf8");
+    const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+    const cargo = readFileSync(resolve(root, "src-tauri/Cargo.toml"), "utf8");
+
+    expect(packageJson.license).toBe("UNLICENSED");
+    expect(cargo).toContain('license-file = "../LICENSE"');
+    expect(license).toContain("All rights reserved");
+    expect(license).toContain("不得复制、修改");
+    expect(notices).toContain("@tauri-apps/api");
+    expect(notices).toContain("tauri-plugin-updater");
+    expect(notices).toContain("THIRD_PARTY_LICENSES.txt");
+    expect(notices).toContain("SPDX License List 3.28.0");
+    expect(notices).toContain("WebView2 Runtime");
+    expect(notices).toContain("系统字体");
+    expect(rights).toContain("随公开测试安装包复制和分发");
+    expect(rights).toContain("不授权把白猫照片改编为正式桌宠角色");
+    expect(placeholderLicense).toContain("随七酱桌宠公开测试安装包复制和分发");
+    expect(aggregate).toContain("SPDX-License-List-Version: 3.28.0");
+    expect(aggregate.match(/^=== PACKAGE BEGIN ===$/gm)?.length).toBeGreaterThan(500);
+    expect([license, notices, aggregate, rights, placeholderLicense].join("\n")).not.toMatch(/F:\\STAGE|C:\\Users\\77/i);
+
+    const validator = readFileSync(resolve(root, "scripts/validate-third-party-licenses.mjs"), "utf8");
+    const aggregateBuilder = readFileSync(resolve(root, "scripts/licenses/license-aggregate.mjs"), "utf8");
+    expect(packageJson.scripts["validate:licenses"]).toContain("validate-third-party-licenses.mjs");
+    expect(packageJson.scripts["generate:licenses"]).toContain("generate-third-party-licenses.mjs");
+    expect(packageJson.scripts.validate).toContain("validate:licenses");
+    expect(packageJson.scripts.build).toContain("validate:licenses");
+    expect(validator).toContain("buildThirdPartyLicenseAggregate");
+    expect(validator).toContain("bundle.resources");
+    expect(aggregateBuilder).toContain('"--offline"');
+    expect(aggregateBuilder).toContain("Cached archive checksum does not match Cargo.lock");
+    expect(aggregateBuilder).not.toMatch(/\bfetch\s*\(|https?\.request\s*\(/);
+  });
 });

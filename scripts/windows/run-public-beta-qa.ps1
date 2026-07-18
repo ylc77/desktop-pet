@@ -44,7 +44,12 @@ if ([string]::IsNullOrWhiteSpace($InstallerPath)) {
     $candidate = Get-DeskPetReleaseInstaller -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release'))
     if ($candidate) { $InstallerPath = $candidate.FullName }
 }
-$versionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory ([System.IO.Path]::Combine($repo, 'release')) -InstallerPath $InstallerPath -ExplicitExpectedVersion $ExpectedVersion
+$versionReleaseDirectory = if ($Mode -eq 'ApplicationUpdater' -and -not [string]::IsNullOrWhiteSpace($UpdaterManifestPath)) {
+    $null
+} else {
+    [System.IO.Path]::Combine($repo, 'release')
+}
+$versionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory $versionReleaseDirectory -InstallerPath $InstallerPath -ExplicitExpectedVersion $ExpectedVersion
 $ExpectedVersion = $versionContext.ExpectedVersion
 Assert-DeskPetVersionContext -VersionContext $versionContext
 function Save-EnvironmentResult {

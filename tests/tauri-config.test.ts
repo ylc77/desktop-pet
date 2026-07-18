@@ -8,9 +8,14 @@ describe("Tauri window capabilities", () => {
     permissions: string[];
   };
   const tauriConfig = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")) as {
-    bundle: { createUpdaterArtifacts: boolean };
+    bundle: { createUpdaterArtifacts: boolean; resources: Record<string, string> };
     plugins?: { updater?: null | { pubkey: string; endpoints: string[]; windows: { installMode: string } } };
-    app: { security: { assetProtocol?: { enable: boolean; scope: { allow: string[]; deny?: string[] } } } };
+    app: {
+      security: {
+        csp: string;
+        assetProtocol?: { enable: boolean; scope: { allow: string[]; deny?: string[] } };
+      };
+    };
   };
   const updaterBuildConfig = JSON.parse(readFileSync("src-tauri/tauri.updater.conf.json", "utf8")) as {
     bundle: { createUpdaterArtifacts: boolean };
@@ -29,6 +34,15 @@ describe("Tauri window capabilities", () => {
   it("keeps ordinary builds unsigned while the dedicated updater build creates artifacts", () => {
     expect(tauriConfig.bundle.createUpdaterArtifacts).toBe(false);
     expect(updaterBuildConfig.bundle.createUpdaterArtifacts).toBe(true);
+  });
+
+  it("bundles the project, dependency, and asset-rights notices", () => {
+    expect(tauriConfig.bundle.resources).toEqual({
+      "../LICENSE": "LICENSE",
+      "../THIRD_PARTY_LICENSES.txt": "THIRD_PARTY_LICENSES.txt",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+      "../docs/ASSET_RIGHTS.md": "docs/ASSET_RIGHTS.md",
+    });
   });
 
   it("uses a deserializable, network-disabled updater object for ordinary builds", () => {
@@ -90,8 +104,23 @@ describe("Tauri window capabilities", () => {
   it("exposes only the installed character subtree through the asset protocol", () => {
     const protocol = tauriConfig.app.security.assetProtocol;
     expect(protocol?.enable).toBe(true);
-    expect(protocol?.scope.allow).toEqual(["$APPLOCALDATA/characters/**/*"]);
+    expect(protocol?.scope.allow).toEqual(["$APPLOCALDATA/characters/**/*.png"]);
     expect(protocol?.scope.deny).toContain("$APPLOCALDATA/EBWebView/**/*");
     expect(protocol?.scope.allow).not.toContain("**/*");
+  });
+
+  it("keeps imported assets out of executable CSP source directives", () => {
+    const directives = new Map(
+      tauriConfig.app.security.csp.split(";").map((directive) => {
+        const [name, ...sources] = directive.trim().split(/\s+/);
+        return [name, sources] as const;
+      }),
+    );
+    expect(directives.get("default-src")).toEqual(["'self'"]);
+    expect(directives.get("script-src")).toEqual(["'self'"]);
+    expect(directives.get("img-src")).toEqual(["'self'", "asset:", "http://asset.localhost", "data:"]);
+    for (const directive of ["object-src", "frame-src", "base-uri"]) {
+      expect(directives.get(directive)).toEqual(["'none'"]);
+    }
   });
 });

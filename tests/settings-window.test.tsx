@@ -65,6 +65,37 @@ class FakeSettingsClient implements SettingsWindowClientLike {
   navigate(section: SettingsSectionId): void { this.navigationListeners.forEach((listener) => listener(section)); }
 }
 
+class DeferredSettingsClient extends FakeSettingsClient {
+  private readonly pending: Array<{
+    action: DesktopControlAction;
+    resolve: (result: DesktopControlResult) => void;
+  }> = [];
+
+  override request(action: DesktopControlAction, payload?: unknown): Promise<DesktopControlResult> {
+    this.requests.push({ action, payload });
+    return new Promise((resolve) => this.pending.push({ action, resolve }));
+  }
+
+  settleNext({ ok, patch, message }: { ok: boolean; patch?: Partial<typeof DEFAULT_SETTINGS>; message?: string }): void {
+    const pending = this.pending.shift();
+    if (!pending) throw new Error("没有待完成的设置请求");
+    if (ok && patch) {
+      this.current = {
+        ...this.current,
+        settings: { ...this.current.settings, ...patch },
+        revision: this.current.revision + 1,
+      };
+    }
+    pending.resolve({
+      requestId: `deferred-${this.requests.length - this.pending.length}`,
+      action: pending.action,
+      ok,
+      snapshot: this.current,
+      ...(ok ? {} : { error: { code: "settings-apply-failed", message: message ?? "保存失败" } }),
+    });
+  }
+}
+
 afterEach(() => {
   cleanup();
   window.history.replaceState({}, "", "/");
@@ -99,6 +130,127 @@ describe("SettingsWindow", () => {
     act(() => client.emitSnapshot());
     fireEvent.click(await screen.findByRole("checkbox", { name: "开机启动" }));
     await waitFor(() => expect(client.requests[0]).toEqual({ action: "patch-settings", payload: { patch: { autostart: true } } }));
+  });
+
+  it("serializes rapid slider changes and persists the final value", async () => {
+    window.history.replaceState({}, "", "/?section=appearance");
+    const client = new DeferredSettingsClient();
+    render(<SettingsWindow client={client} onClose={vi.fn()} />);
+    act(() => client.emitSnapshot());
+    const slider = await screen.findByRole("slider", { name: "大小 100%" });
+
+    fireEvent.change(slider, { target: { value: "1.1" } });
+    await waitFor(() => expect(client.requests).toHaveLength(1));
+    fireEvent.change(slider, { target: { value: "1.2" } });
+    fireEvent.change(slider, { target: { value: "1.35" } });
+
+    expect(slider).toHaveValue("1.35");
+    expect(client.requests).toHaveLength(1);
+    act(() => client.settleNext({ ok: true, patch: { scale: 1.1 } }));
+
+    await waitFor(() => expect(client.requests).toHaveLength(2));
+    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 1.35 } } });
+    act(() => client.settleNext({ ok: true, patch: { scale: 1.35 } }));
+
+    await waitFor(() => expect(screen.getByText("大小 135%")).toBeInTheDocument());
+    expect(screen.getByText("更改会即时保存并立即生效。")).toBeInTheDocument();
+  });
+
+  it("blocks reset and updater actions while a settings patch is in flight", async () => {
+    window.history.replaceState({}, "", "/?section=update");
+    const client = new DeferredSettingsClient();
+    const available = snapshot({
+      updater: {
+        ...snapshot().updater,
+        status: "available",
+        update: {
+          currentVersion: "0.1.2-beta.1",
+          version: "0.1.3-beta.1",
+          notes: "提升稳定性",
+          publishedAt: "2026-07-18T00:00:00.000Z",
+          contentLength: 100,
+        },
+      },
+    });
+    render(<SettingsWindow client={client} onClose={vi.fn()} />);
+    act(() => client.emitSnapshot(available));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "自动检查更新" }));
+    await waitFor(() => expect(client.requests).toHaveLength(1));
+
+    const updateNow = screen.getByRole("button", { name: "立即更新" });
+    expect(updateNow).toBeDisabled();
+    fireEvent.click(updateNow);
+    act(() => client.navigate("about"));
+    const reset = await screen.findByRole("button", { name: "恢复默认设置" });
+    expect(reset).toBeDisabled();
+    fireEvent.click(reset);
+
+    expect(screen.queryByRole("alertdialog", { name: "恢复默认设置？" })).not.toBeInTheDocument();
+    expect(client.requests).toHaveLength(1);
+    expect(client.requests[0].action).toBe("patch-settings");
+    act(() => client.settleNext({ ok: true, patch: { automaticUpdateChecks: false } }));
+  });
+
+  it("does not close until the queued final slider value has been sent", async () => {
+    window.history.replaceState({}, "", "/?section=appearance");
+    const client = new DeferredSettingsClient();
+    const onClose = vi.fn();
+    render(<SettingsWindow client={client} onClose={onClose} />);
+    act(() => client.emitSnapshot());
+    const slider = await screen.findByRole("slider", { name: "大小 100%" });
+
+    fireEvent.change(slider, { target: { value: "1.1" } });
+    await waitFor(() => expect(client.requests).toHaveLength(1));
+    fireEvent.change(slider, { target: { value: "1.4" } });
+    const close = screen.getByRole("button", { name: "关闭七酱桌宠设置" });
+    expect(close).toBeDisabled();
+    fireEvent.click(close);
+    expect(onClose).not.toHaveBeenCalled();
+
+    act(() => client.settleNext({ ok: true, patch: { scale: 1.1 } }));
+    await waitFor(() => expect(client.requests).toHaveLength(2));
+    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 1.4 } } });
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => client.settleNext({ ok: true, patch: { scale: 1.4 } }));
+
+    await waitFor(() => expect(close).toBeEnabled());
+    fireEvent.click(close);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains a queued final patch before stopping the client on unmount", async () => {
+    window.history.replaceState({}, "", "/?section=appearance");
+    const client = new DeferredSettingsClient();
+    const view = render(<SettingsWindow client={client} onClose={vi.fn()} />);
+    act(() => client.emitSnapshot());
+    const slider = await screen.findByRole("slider", { name: "大小 100%" });
+
+    fireEvent.change(slider, { target: { value: "1.1" } });
+    await waitFor(() => expect(client.requests).toHaveLength(1));
+    fireEvent.change(slider, { target: { value: "1.45" } });
+    view.unmount();
+    expect(client.order).not.toContain("stop");
+
+    act(() => client.settleNext({ ok: true, patch: { scale: 1.1 } }));
+    await waitFor(() => expect(client.requests).toHaveLength(2));
+    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 1.45 } } });
+    act(() => client.settleNext({ ok: true, patch: { scale: 1.45 } }));
+    await waitFor(() => expect(client.order).toContain("stop"));
+  });
+
+  it("reports the final patch failure and restores the canonical setting", async () => {
+    window.history.replaceState({}, "", "/?section=appearance");
+    const client = new DeferredSettingsClient();
+    render(<SettingsWindow client={client} onClose={vi.fn()} />);
+    act(() => client.emitSnapshot());
+    const slider = await screen.findByRole("slider", { name: "大小 100%" });
+
+    fireEvent.change(slider, { target: { value: "1.5" } });
+    await waitFor(() => expect(client.requests).toHaveLength(1));
+    act(() => client.settleNext({ ok: false, message: "无法保存大小设置" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法保存大小设置");
+    expect(screen.getByText("大小 100%")).toBeInTheDocument();
   });
 
   it("focuses Cancel first and returns focus after Escape closes reset confirmation", async () => {

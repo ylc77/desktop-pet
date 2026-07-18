@@ -1,8 +1,8 @@
 # 公开测试版验收清单
 
-本清单是 `0.1.0` 公开测试版 Gate 的唯一状态总表。状态只能填写 `passed`、`failed`、`blocked` 或 `not_executed`，并必须附带环境结果 JSON 或真实人工记录。自动化、当前机器、Sandbox、Windows 10 VM、Windows 11 VM 和真实硬件结果不得互相替代。
+本清单是当前 `0.1.2-beta.3` 公开测试候选 Gate 的状态总表。状态只能填写 `passed`、`failed`、`blocked` 或 `not_executed`，并必须附带当前候选的环境结果 JSON 或真实人工记录。自动化、当前机器、Sandbox、Windows 10 VM、Windows 11 VM 和真实硬件结果不得互相替代。
 
-当前结论：**BLOCKED / NOT_READY**。生产 updater 密钥、备份、公钥和 GitHub Releases endpoint 已确认，发布工具可以隔离构建产物、严格校验 `latest.json` 并真实验签；但远端资产尚未发布，真实 A → B 尚未执行，Windows Authenticode 仍为 `NotSigned`。不得把本地签名构建标记为公开自动更新可用，也不创建正式 beta 标签或公开测试版目录。
+当前结论：**BLOCKED / NOT_READY**。`0.1.2-beta.2` Draft 只保留为历史证据；修复后的 `0.1.2-beta.3` 已完成未签名的本地 Release 构建，但还未在干净提交上重建、生成生产 Updater 签名、上传或执行真实 A → B。生产 updater 密钥、公钥和 GitHub Releases endpoint 已确认，Windows Authenticode 预计仍为 `NotSigned`。不得把旧候选或本地测试构建标记为当前公开自动更新可用。
 
 ## A. 必须通过
 

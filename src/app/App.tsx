@@ -18,8 +18,10 @@ import {
 } from "../core/character/CharacterCatalog";
 import type { AnimationState, LoadedCharacter } from "../core/character/types";
 import { validateManifest } from "../core/character/CharacterValidator";
+import { persistSelectionBeforeActivation } from "../core/character/selectionPersistence";
 import { appSettingsSchema, DEFAULT_SETTINGS, DEVELOPER_TOOLS_ALLOWED, resetSettingsPreservingCharacter, type AppSettings } from "../core/settings/settingsSchema";
 import { loadSettings, parseSettings, saveSettings, saveSettingsStrict } from "../core/settings/settingsStore";
+import { SettingsTransactionQueue } from "../core/settings/settingsTransactionQueue";
 import { closeApp, isTauriRuntime, restoreWindowPosition, saveWindowPosition, setAlwaysOnTop } from "../core/window/windowController";
 import { exportDiagnostics, openLogDirectory } from "../core/diagnostics/diagnosticClient";
 import { log } from "../core/diagnostics/logger";
@@ -28,6 +30,7 @@ import { reconcilePendingUpdate, shouldRunAutomaticCheck, startupCheckDelayMs } 
 import { UpdaterStore } from "../core/updater/updaterStore";
 import { useAnimationPlayer } from "../hooks/useAnimationPlayer";
 import { usePetMotion } from "../hooks/usePetMotion";
+import { isRuntimeMotionPaused, usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
 import {
   DesktopControlActionError,
   MainControlCoordinator,
@@ -46,6 +49,7 @@ const settingsWindowPatchKeys = new Set<keyof AppSettings>([
 ]);
 
 type NativeAppAction = "appearance" | "settings" | "toggle-pause" | "hide" | "show" | "toggle-top" | "toggle-autostart" | "check-updates" | "about" | "reset" | "quit";
+type ToggleableSetting = "animationsPaused" | "developerPanel";
 
 interface NativeMenuStatePayload {
   paused: boolean;
@@ -136,7 +140,7 @@ export default function App() {
   const [appearanceFeedback, setAppearanceFeedback] = useState<string | null>(null);
   const [updateResultNotice, setUpdateResultNotice] = useState<string | null>(null);
   const settingsRef = useRef(settings);
-  settingsRef.current = settings;
+  const settingsTransactions = useRef(new SettingsTransactionQueue());
   const characterRef = useRef(character);
   characterRef.current = character;
   const desktopRevision = useRef(0);
@@ -145,26 +149,122 @@ export default function App() {
   const preparedRelease = useRef<(() => void) | null>(null);
   const selectionController = useRef<AbortController | null>(null);
   const selectionGeneration = useRef(0);
+  const shuttingDown = useRef(false);
 
-  const activatePrepared = useCallback((prepared: PreparedCharacter, persistSelection: boolean) => {
+  const runSettingsTransaction = useCallback(function runSettingsTransaction<T>(operation: () => Promise<T>): Promise<T> {
+    return settingsTransactions.current.run(operation);
+  }, []);
+
+  const replaceSettings = useCallback((update: AppSettings | ((current: AppSettings) => AppSettings)): AppSettings => {
+    const next = typeof update === "function" ? update(settingsRef.current) : update;
+    settingsRef.current = next;
+    setSettings(next);
+    return next;
+  }, []);
+
+  const queueSettingsStateUpdate = useCallback((update: (current: AppSettings) => AppSettings): Promise<void> => {
+    if (shuttingDown.current) return Promise.resolve();
+    return runSettingsTransaction(async () => {
+      const next = update(settingsRef.current);
+      replaceSettings(next);
+      await saveSettings(next);
+    }).catch((error) => {
+      log("warn", "设置已在当前会话生效，但持久化失败", error);
+    });
+  }, [replaceSettings, runSettingsTransaction]);
+
+  const applyChangedNativeSettings = useCallback(async (next: AppSettings, previous: AppSettings) => {
+    if (next.alwaysOnTop !== previous.alwaysOnTop) await setAlwaysOnTop(next.alwaysOnTop);
+    if (!isTauriRuntime()) return;
+    if (next.hideInFullscreen !== previous.hideInFullscreen) {
+      await invoke("set_fullscreen_auto_hide", { enabled: next.hideInFullscreen });
+    }
+    if (next.autostart !== previous.autostart) {
+      await (next.autostart ? enableAutostart() : disableAutostart());
+    }
+  }, []);
+
+  const commitSettings = useCallback(async (mutate: (current: AppSettings) => AppSettings) => {
+    if (shuttingDown.current) return;
+    await runSettingsTransaction(async () => {
+      const previous = settingsRef.current;
+      const next = mutate(previous);
+      try {
+        await applyChangedNativeSettings(next, previous);
+        await saveSettingsStrict(next);
+      } catch (error) {
+        let rollbackFailed = false;
+        try { await applyChangedNativeSettings(previous, next); }
+        catch (rollbackError) {
+          rollbackFailed = true;
+          log("warn", "设置应用失败后的系统状态恢复未全部完成", rollbackError);
+        }
+        try { await saveSettingsStrict(previous); }
+        catch (rollbackError) {
+          rollbackFailed = true;
+          log("warn", "设置应用失败后无法严格写回原设置", rollbackError);
+        }
+        log("warn", rollbackFailed ? "设置未能完整应用，原设置也未能完全恢复" : "设置未能完整应用，已保留原设置", error);
+        throw new DesktopControlActionError(
+          "settings-apply-failed",
+          rollbackFailed
+            ? "这项设置未能保存，原设置也未能完全恢复。请重启七酱桌宠并查看日志。"
+            : "这项设置未能保存，已保留原来的设置。请重试或查看日志。",
+        );
+      }
+      replaceSettings(next);
+    });
+  }, [applyChangedNativeSettings, replaceSettings, runSettingsTransaction]);
+
+  const flushSettingsAndClose = useCallback(async () => {
+    if (shuttingDown.current) return;
+    shuttingDown.current = true;
+    try {
+      await runSettingsTransaction(async () => {
+        const current = settingsRef.current;
+        let finalSettings = current;
+        if (isTauriRuntime()) {
+          try {
+            const position = await saveWindowPosition();
+            if (position) finalSettings = { ...current, position };
+          } catch (error) {
+            log("warn", "退出前读取最终窗口位置失败，保留最近位置", error);
+          }
+        }
+        replaceSettings(finalSettings);
+        try { await saveSettings(finalSettings); }
+        catch (error) { log("warn", "退出前保存最终设置失败", error); }
+        await closeApp();
+      });
+    } catch (error) {
+      shuttingDown.current = false;
+      throw error;
+    }
+  }, [replaceSettings, runSettingsTransaction]);
+
+  const settingsForActivation = useCallback((loaded: LoadedCharacter, persistSelection: boolean): AppSettings => {
+    const current = settingsRef.current;
+    const characterChanged = previousCharacterId.current !== null && previousCharacterId.current !== loaded.manifest.id;
+    const firstLaunch = previousCharacterId.current === null && current.position === null && current.scale === DEFAULT_SETTINGS.scale;
+    return {
+      ...current,
+      characterId: persistSelection ? loaded.manifest.id : current.characterId,
+      skinId: persistSelection ? "default" : current.skinId,
+      scale: characterChanged || firstLaunch ? loaded.manifest.defaultScale : current.scale,
+    };
+  }, []);
+
+  const activatePrepared = useCallback((prepared: PreparedCharacter, persistSelection: boolean, preparedSettings?: AppSettings) => {
     preparedRelease.current?.();
     preparedRelease.current = prepared.release;
     const loaded = prepared.character;
+    const nextSettings = preparedSettings ?? settingsForActivation(loaded, persistSelection);
     setCharacter(loaded);
     setCacheCount(prepared.cacheCount);
     setFrameLoad({ status: "ready", loaded: prepared.loadedFrameCount, failed: prepared.failedFrames.length, generation: selectionGeneration.current });
-    setSettings((current) => {
-      const characterChanged = previousCharacterId.current !== null && previousCharacterId.current !== loaded.manifest.id;
-      const firstLaunch = previousCharacterId.current === null && current.position === null && current.scale === DEFAULT_SETTINGS.scale;
-      return {
-        ...current,
-        characterId: persistSelection ? loaded.manifest.id : current.characterId,
-        skinId: persistSelection ? "default" : current.skinId,
-        scale: characterChanged || firstLaunch ? loaded.manifest.defaultScale : current.scale,
-      };
-    });
+    replaceSettings(nextSettings);
     previousCharacterId.current = loaded.manifest.id;
-  }, []);
+  }, [replaceSettings, settingsForActivation]);
 
   const notifySelectionChanged = useCallback(async (change: CharacterSelectionChanged) => {
     if (!isTauriRuntime()) return;
@@ -173,6 +273,11 @@ export default function App() {
   }, []);
 
   const performSelection = useCallback(async (request: CharacterSelectionRequest) => {
+    if (shuttingDown.current) {
+      await cancelNativeCharacterSelection(request.requestId);
+      await notifySelectionChanged({ id: request.id, source: request.source ?? "bundled", requestId: request.requestId, ok: false, error: "应用正在退出，角色切换已取消" });
+      return;
+    }
     if (isSelectionRequestExpired(request)) {
       await cancelNativeCharacterSelection(request.requestId);
       await notifySelectionChanged({ id: request.id, source: request.source ?? "bundled", requestId: request.requestId, ok: false, error: "角色切换请求已过期" });
@@ -206,7 +311,7 @@ export default function App() {
       .finally(() => window.clearTimeout(prepareTimeout));
     const deadlineExpired = isSelectionRequestExpired(request);
     if (deadlineExpired && !controller.signal.aborted) controller.abort();
-    if (controller.signal.aborted || generation !== selectionGeneration.current || deadlineExpired) {
+    if (shuttingDown.current || controller.signal.aborted || generation !== selectionGeneration.current || deadlineExpired) {
       if (transaction.ok) transaction.value?.release();
       await cancelNativeCharacterSelection(request.requestId);
       await notifySelectionChanged({ ...selection, ok: false, error: timedOut || deadlineExpired ? "角色资源验证超时，切换已取消" : "切换已取消" });
@@ -232,13 +337,47 @@ export default function App() {
       return;
     }
     const authorizationExpired = isSelectionRequestExpired(request);
-    if (controller.signal.aborted || generation !== selectionGeneration.current || authorizationExpired) {
+    if (shuttingDown.current || controller.signal.aborted || generation !== selectionGeneration.current || authorizationExpired) {
       transaction.value.release();
       await cancelNativeCharacterSelection(request.requestId);
       await notifySelectionChanged({ ...selection, ok: false, error: authorizationExpired ? "角色资源验证超时，切换已取消" : "切换已取消" });
       return;
     }
-    activatePrepared(transaction.value, true);
+    const persistence = await runSettingsTransaction(async () => {
+      const previousSettings = settingsRef.current;
+      const selectedSettings = settingsForActivation(transaction.value!.character, true);
+      return persistSelectionBeforeActivation({
+        previous: previousSettings,
+        next: selectedSettings,
+        persist: saveSettingsStrict,
+        isCurrent: () => !shuttingDown.current
+          && !controller.signal.aborted
+          && generation === selectionGeneration.current
+          && !isSelectionRequestExpired(request),
+        // This rollback executes while the single settings transaction queue is held,
+        // so a newer selection cannot be overwritten by the older request.
+        canRollback: () => true,
+        activate: () => activatePrepared(transaction.value!, true, selectedSettings),
+      });
+    });
+    if (!persistence.ok) {
+      transaction.value.release();
+      await cancelNativeCharacterSelection(request.requestId);
+      const error = persistence.phase === "persist"
+        ? "无法保存角色选择，已保留当前外观"
+        : persistence.phase === "rollback"
+          ? "角色切换已取消，但无法恢复原设置；请重启应用"
+          : shuttingDown.current
+            ? "应用正在退出，角色切换已取消"
+            : "角色切换已被更新请求取代";
+      if (generation === selectionGeneration.current) {
+        setFrameLoad((current) => ({ ...current, status: preparedRelease.current ? "ready" : "failed", failed: current.failed + 1, generation }));
+        setAppearanceFeedback(error);
+      }
+      log("warn", `${error}（${String(persistence.error)}）`);
+      await notifySelectionChanged({ ...selection, ok: false, error });
+      return;
+    }
     try {
       await finalizeNativeCharacterSelection(transaction.value.character.manifest.id, request.requestId, generation);
     } catch (error) {
@@ -260,23 +399,22 @@ export default function App() {
     }
     setAppearanceFeedback(`已切换为 ${transaction.value.character.manifest.name}`);
     await notifySelectionChanged({ ...selection, ok: true });
-  }, [activatePrepared, catalog, notifySelectionChanged]);
+  }, [activatePrepared, catalog, notifySelectionChanged, runSettingsTransaction, settingsForActivation]);
 
   useEffect(() => {
     void (async () => {
       let loaded = DEFAULT_SETTINGS;
       try {
         loaded = await loadSettings();
-        setSettings({ ...loaded, developerPanel: DEVELOPER_TOOLS_ALLOWED && loaded.developerPanel });
-        await setAlwaysOnTop(loaded.alwaysOnTop);
-        await restoreWindowPosition(loaded.position);
+        replaceSettings({ ...loaded, developerPanel: DEVELOPER_TOOLS_ALLOWED && loaded.developerPanel });
       } catch (error) {
-        log("error", "原生窗口初始化失败，已使用安全默认界面继续启动", error);
-      } finally {
-        setReady(true);
+        log("error", "设置初始化失败，已使用安全默认值继续启动", error);
       }
+      try { await restoreWindowPosition(loaded.position); }
+      catch (error) { log("warn", "恢复窗口位置失败，已使用系统默认位置", error); }
+      setReady(true);
     })();
-  }, []);
+  }, [replaceSettings]);
 
   useEffect(() => {
     if (!ready) return;
@@ -296,12 +434,30 @@ export default function App() {
           prepared.release();
           throw error;
         }
-        if (!active || controller.signal.aborted || generation !== selectionGeneration.current) {
+        if (shuttingDown.current || !active || controller.signal.aborted || generation !== selectionGeneration.current) {
           prepared.release();
           await cancelNativeCharacterSelection(requestId);
           return false;
         }
-        activatePrepared(prepared, false);
+        const activated = await runSettingsTransaction(async () => {
+          if (shuttingDown.current) return false;
+          const previousSettings = settingsRef.current;
+          const preparedSettings = settingsForActivation(prepared.character, false);
+          try { await saveSettings(preparedSettings); }
+          catch (error) { log("warn", "启动或重载角色时保存最终缩放失败", error); }
+          if (shuttingDown.current || !active || controller.signal.aborted || generation !== selectionGeneration.current) {
+            try { await saveSettings(previousSettings); }
+            catch (error) { log("warn", "启动角色被取代后无法恢复先前设置", error); }
+            return false;
+          }
+          activatePrepared(prepared, false, preparedSettings);
+          return true;
+        });
+        if (!activated) {
+          prepared.release();
+          await cancelNativeCharacterSelection(requestId);
+          return false;
+        }
         try {
           await finalizeNativeCharacterSelection(prepared.character.manifest.id, requestId, generation);
         } catch (error) {
@@ -320,8 +476,9 @@ export default function App() {
       } catch (error) {
         if (!controller.signal.aborted) log("warn", "角色目录读取失败，将尝试读取当前内置角色", error);
       }
-      const entry = loadedCatalog.find((candidate) => candidate.id === settings.characterId);
-      const selection: CharacterSelectionRequest = { id: settings.characterId, source: entry?.source ?? "bundled" };
+      const selectedCharacterId = settingsRef.current.characterId;
+      const entry = loadedCatalog.find((candidate) => candidate.id === selectedCharacterId);
+      const selection: CharacterSelectionRequest = { id: selectedCharacterId, source: entry?.source ?? "bundled" };
       try {
         const prepared = await prepareCatalogCharacter(selection, { signal: controller.signal, generation });
         if (!active || controller.signal.aborted) { prepared.release(); return; }
@@ -349,7 +506,7 @@ export default function App() {
       }
     })();
     return () => { active = false; controller.abort(); };
-  }, [activatePrepared, ready, reloadKey]);
+  }, [activatePrepared, ready, reloadKey, runSettingsTransaction, settingsForActivation]);
 
   useEffect(() => () => preparedRelease.current?.(), []);
 
@@ -367,24 +524,17 @@ export default function App() {
 
   useEffect(() => {
     if (!ready) return;
-    const timer = window.setTimeout(() => void saveSettings(settings).catch((error) => log("warn", "保存设置失败", error)), 250);
-    return () => window.clearTimeout(timer);
-  }, [settings, ready]);
-
-  useEffect(() => {
-    if (!ready) return;
-    void setAlwaysOnTop(settings.alwaysOnTop).catch((error) => log("warn", "修改置顶状态失败", error));
-  }, [settings.alwaysOnTop, ready]);
-
-  useEffect(() => {
-    if (!ready || !isTauriRuntime()) return;
-    void invoke("set_fullscreen_auto_hide", { enabled: settings.hideInFullscreen }).catch((error) => log("warn", "修改全屏自动隐藏失败", error));
-  }, [settings.hideInFullscreen, ready]);
-
-  useEffect(() => {
-    if (!ready || !isTauriRuntime()) return;
-    void (settings.autostart ? enableAutostart() : disableAutostart()).catch((error) => log("warn", "修改开机启动失败", error));
-  }, [settings.autostart, ready]);
+    void runSettingsTransaction(async () => {
+      const current = settingsRef.current;
+      try { await setAlwaysOnTop(current.alwaysOnTop); }
+      catch (error) { log("warn", "应用启动时恢复置顶状态失败", error); }
+      if (!isTauriRuntime()) return;
+      try { await invoke("set_fullscreen_auto_hide", { enabled: current.hideInFullscreen }); }
+      catch (error) { log("warn", "应用启动时恢复全屏自动隐藏状态失败", error); }
+      try { await (current.autostart ? enableAutostart() : disableAutostart()); }
+      catch (error) { log("warn", "应用启动时恢复开机启动状态失败", error); }
+    });
+  }, [ready, runSettingsTransaction]);
 
   useEffect(() => {
     if (!ready || !isTauriRuntime()) return;
@@ -411,26 +561,26 @@ export default function App() {
       if (!transition || transition === lastTransition) return;
       lastTransition = transition;
       if (transition.from === "checking") {
-        setSettings((current) => ({
+        queueSettingsStateUpdate((current) => ({
           ...current,
           updateLastCheckAt: transition.at,
           updateLastAvailableVersion: snapshot.update?.version ?? null,
         }));
       }
       if (snapshot.status === "error") {
-        setSettings((current) => ({
+        queueSettingsStateUpdate((current) => ({
           ...current,
           updateLastFailureCategory: snapshot.error?.category ?? "unknown",
         }));
         log("warn", snapshot.reason, snapshot.error?.message);
       } else if (["upToDate", "available", "readyToInstall", "restarting", "postponed", "skipped"].includes(snapshot.status)) {
-        setSettings((current) => current.updateLastFailureCategory === null ? current : {
+        queueSettingsStateUpdate((current) => current.updateLastFailureCategory === null ? current : {
           ...current,
           updateLastFailureCategory: null,
         });
       }
     });
-  }, [updaterStore]);
+  }, [queueSettingsStateUpdate, updaterStore]);
 
   useEffect(() => {
     if (!ready) return;
@@ -442,7 +592,7 @@ export default function App() {
       if (configuration) {
         const result = reconcilePendingUpdate(configuration.currentVersion, settings.pendingUpdateVersion, settings.updateLastFailedVersion);
         if (result.status === "installed") {
-          setSettings((current) => ({
+          queueSettingsStateUpdate((current) => ({
             ...current,
             pendingUpdateVersion: null,
             lastConfirmedUpdateVersion: result.version,
@@ -455,7 +605,7 @@ export default function App() {
             log("warn", `更新结果未确认：当前版本 ${result.currentVersion}，目标版本 ${result.targetVersion}`);
             setUpdateResultNotice(`更新未完成：当前仍为 ${result.currentVersion}，目标为 ${result.targetVersion}。可在“关于”中重新检查。`);
           }
-          setSettings((current) => {
+          queueSettingsStateUpdate((current) => {
             const failureCategory = current.updateLastFailureCategory === "restartFailed" || current.updateLastFailureCategory === "installFailed"
               ? current.updateLastFailureCategory
               : "installFailed";
@@ -474,7 +624,7 @@ export default function App() {
       active = false;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [ready, settings.automaticUpdateChecks, settings.pendingUpdateVersion, settings.updateLastCheckAt, settings.updateLastFailedVersion, settings.updateSkippedVersion, updaterStore]);
+  }, [queueSettingsStateUpdate, ready, settings.automaticUpdateChecks, settings.pendingUpdateVersion, settings.updateLastCheckAt, settings.updateLastFailedVersion, settings.updateSkippedVersion, updaterStore]);
 
   useEffect(() => {
     if (!isTauriRuntime() || !ready) return;
@@ -487,14 +637,14 @@ export default function App() {
     register(getCurrentWindow().onMoved(() => {
       if (positionTimer !== null) window.clearTimeout(positionTimer);
       positionTimer = window.setTimeout(() => void saveWindowPosition().then((position) => {
-        if (position) setSettings((current) => ({ ...current, position }));
+        if (position) queueSettingsStateUpdate((current) => ({ ...current, position }));
       }).catch((error) => log("warn", "保存窗口位置失败", error)), 180);
     }));
     register(listen<NativeAppAction>("app-action", (event) => {
       const action = event.payload;
-      if (action === "toggle-pause") setSettings((current) => ({ ...current, animationsPaused: !current.animationsPaused }));
-      if (action === "toggle-top") setSettings((current) => ({ ...current, alwaysOnTop: !current.alwaysOnTop }));
-      if (action === "toggle-autostart") setSettings((current) => ({ ...current, autostart: !current.autostart }));
+      if (action === "toggle-pause") void commitSettings((current) => ({ ...current, animationsPaused: !current.animationsPaused })).catch((error) => log("warn", "切换动画暂停状态失败", error));
+      if (action === "toggle-top") void commitSettings((current) => ({ ...current, alwaysOnTop: !current.alwaysOnTop })).catch((error) => log("warn", "切换窗口置顶状态失败", error));
+      if (action === "toggle-autostart") void commitSettings((current) => ({ ...current, autostart: !current.autostart })).catch((error) => log("warn", "切换开机启动状态失败", error));
       if (action === "appearance") void invoke("show_appearance_window").catch((error) => log("warn", "打开外观中心失败", error));
       if (action === "settings") void showSettingsWindow("general").catch((error) => log("warn", "打开设置失败", error));
       if (action === "about") void showSettingsWindow("about").catch((error) => log("warn", "打开关于与支持失败", error));
@@ -504,12 +654,12 @@ export default function App() {
       }
       if (action === "reset") {
         void getCurrentWindow().setPosition(new PhysicalPosition(40, 40))
-          .then(() => setSettings((current) => ({ ...current, position: { x: 40, y: 40 } })))
+          .then(() => queueSettingsStateUpdate((current) => ({ ...current, position: { x: 40, y: 40 } })))
           .catch((error) => log("warn", "恢复默认位置失败", error));
       }
       if (action === "hide") setWindowVisible(false);
       if (action === "show") setWindowVisible(true);
-      if (action === "quit") void closeApp().catch((error) => log("warn", "退出应用失败", error));
+      if (action === "quit") void flushSettingsAndClose().catch((error) => log("warn", "退出应用失败", error));
     }));
     register(listen<CharacterSelectionRequest>("character-selection-requested", (event) => {
       void performSelection(event.payload).catch((error) => log("warn", "处理角色切换请求失败", error));
@@ -520,64 +670,57 @@ export default function App() {
       if (positionTimer !== null) window.clearTimeout(positionTimer);
       unlisteners.forEach((fn) => fn());
     };
-  }, [performSelection, ready, updaterStore]);
+  }, [commitSettings, flushSettingsAndClose, performSelection, queueSettingsStateUpdate, ready, updaterStore]);
 
-  const patchSettings = useCallback((patch: Partial<AppSettings>) => setSettings((current) => ({ ...current, ...patch })), []);
+  const patchSettings = useCallback((patch: Partial<AppSettings>) => {
+    queueSettingsStateUpdate((current) => ({ ...current, ...patch }));
+  }, [queueSettingsStateUpdate]);
 
-  const applyChangedNativeSettings = useCallback(async (next: AppSettings, previous: AppSettings) => {
-    if (next.alwaysOnTop !== previous.alwaysOnTop) await setAlwaysOnTop(next.alwaysOnTop);
-    if (!isTauriRuntime()) return;
-    if (next.hideInFullscreen !== previous.hideInFullscreen) {
-      await invoke("set_fullscreen_auto_hide", { enabled: next.hideInFullscreen });
-    }
-    if (next.autostart !== previous.autostart) {
-      await (next.autostart ? enableAutostart() : disableAutostart());
-    }
-  }, []);
-
-  const commitSettings = useCallback(async (next: AppSettings) => {
-    const previous = settingsRef.current;
-    try {
-      await applyChangedNativeSettings(next, previous);
-      await saveSettingsStrict(next);
-    } catch (error) {
-      try { await applyChangedNativeSettings(previous, next); }
-      catch (rollbackError) { log("warn", "设置应用失败后的系统状态恢复未全部完成", rollbackError); }
-      log("warn", "设置未能完整应用，已保留原设置", error);
-      throw new DesktopControlActionError("settings-apply-failed", "这项设置未能保存，已保留原来的设置。请重试或查看日志。");
-    }
-    settingsRef.current = next;
-    setSettings(next);
-  }, [applyChangedNativeSettings]);
+  const toggleSetting = useCallback((key: ToggleableSetting) => {
+    queueSettingsStateUpdate((current) => ({ ...current, [key]: !current[key] }));
+  }, [queueSettingsStateUpdate]);
 
   const installUpdate = useCallback(async () => {
+    if (shuttingDown.current) throw new Error("应用正在退出，已取消更新安装");
     await updaterStore.updateNow({
       beforeInstall: async () => {
-        const targetVersion = updaterStore.getSnapshot().update?.version ?? null;
-        if (!targetVersion) throw new Error("更新目标版本不可用");
-        const currentSettings = settingsRef.current;
-        const position = isTauriRuntime() ? await saveWindowPosition() : currentSettings.position;
-        const prepared = { ...currentSettings, position: position ?? currentSettings.position, pendingUpdateVersion: targetVersion };
-        settingsRef.current = prepared;
-        setSettings(prepared);
-        try {
-          await saveSettingsStrict(prepared);
-          if (isTauriRuntime()) await invoke("flush_application_logs");
-        } catch (error) {
-          const cleared = { ...prepared, pendingUpdateVersion: null };
-          settingsRef.current = cleared;
-          setSettings(cleared);
-          try { await saveSettingsStrict(cleared); }
-          catch (rollbackError) { log("warn", "更新准备失败后无法清理待确认版本", rollbackError); }
-          throw error;
-        }
+        await runSettingsTransaction(async () => {
+          if (shuttingDown.current) throw new Error("应用正在退出，已取消更新安装");
+          const targetVersion = updaterStore.getSnapshot().update?.version ?? null;
+          if (!targetVersion) throw new Error("更新目标版本不可用");
+          const currentSettings = settingsRef.current;
+          const position = isTauriRuntime() ? await saveWindowPosition() : currentSettings.position;
+          const prepared = { ...currentSettings, position: position ?? currentSettings.position, pendingUpdateVersion: targetVersion };
+          let preparedPersisted = false;
+          try {
+            await saveSettingsStrict(prepared);
+            preparedPersisted = true;
+            if (shuttingDown.current) throw new Error("应用正在退出，已取消更新安装");
+            replaceSettings(prepared);
+            if (isTauriRuntime()) await invoke("flush_application_logs");
+            if (shuttingDown.current) throw new Error("应用正在退出，已取消更新安装");
+          } catch (error) {
+            if (shuttingDown.current) {
+              if (preparedPersisted) {
+                try { await saveSettingsStrict(currentSettings); }
+                catch (rollbackError) { log("warn", "退出期间取消更新后无法恢复先前设置", rollbackError); }
+              }
+              replaceSettings(currentSettings);
+              throw error;
+            }
+            const cleared = { ...currentSettings, pendingUpdateVersion: null };
+            try { await saveSettingsStrict(cleared); }
+            catch (rollbackError) { log("warn", "更新准备失败后无法清理待确认版本", rollbackError); }
+            replaceSettings(cleared);
+            throw error;
+          }
+        });
       },
     });
-  }, [updaterStore]);
+  }, [replaceSettings, runSettingsTransaction, updaterStore]);
 
   const resetSettings = useCallback(async () => {
-    const reset = resetSettingsPreservingCharacter(settingsRef.current);
-    await commitSettings(reset);
+    await commitSettings((current) => resetSettingsPreservingCharacter(current));
     if (isTauriRuntime()) await invoke("restore_main_window");
   }, [commitSettings]);
 
@@ -599,8 +742,7 @@ export default function App() {
   const handleDesktopControlRequest = useCallback(async (request: DesktopControlRequest) => {
     if (request.action === "patch-settings") {
       const patch = readSettingsPatch(request.payload);
-      const next = appSettingsSchema.parse({ ...settingsRef.current, ...patch });
-      await commitSettings(next);
+      await commitSettings((current) => appSettingsSchema.parse({ ...current, ...patch }));
       return;
     }
     if (request.action === "reset-settings") {
@@ -638,7 +780,7 @@ export default function App() {
       const version = updaterStore.getSnapshot().update?.version ?? null;
       if (!version) throw new DesktopControlActionError("update-unavailable", "当前没有可跳过的更新版本。");
       if (await updaterStore.skip()) {
-        await commitSettings(appSettingsSchema.parse({ ...settingsRef.current, updateSkippedVersion: version }));
+        await commitSettings((current) => appSettingsSchema.parse({ ...current, updateSkippedVersion: version }));
       }
       return;
     }
@@ -692,6 +834,7 @@ export default function App() {
     frameLoad={frameLoad}
     windowVisible={windowVisible}
     onPatch={patchSettings}
+    onToggleSetting={toggleSetting}
     onContextMenu={(position) => void showPetContextMenu(position).catch((error) => log("warn", "打开原生桌宠菜单失败", error))}
     onReload={() => setReloadKey((value) => value + 1)}
     updateSuspended={updateSuspended}
@@ -707,6 +850,7 @@ interface RunningProps {
   frameLoad: FrameLoadDiagnostics;
   windowVisible: boolean;
   onPatch: (patch: Partial<AppSettings>) => void;
+  onToggleSetting: (key: ToggleableSetting) => void;
   onContextMenu: (position: { x: number; y: number }) => void;
   onReload: () => void;
   updateSuspended: boolean;
@@ -714,7 +858,7 @@ interface RunningProps {
   updateResultNotice: string | null;
 }
 
-function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible, onPatch, onContextMenu, onReload, updateSuspended, appearanceFeedback, updateResultNotice }: RunningProps) {
+function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible, onPatch, onToggleSetting, onContextMenu, onReload, updateSuspended, appearanceFeedback, updateResultNotice }: RunningProps) {
   const [showDebugBounds, setShowDebugBounds] = useState(false);
   const [simulateMissingFrame, setSimulateMissingFrame] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -723,8 +867,10 @@ function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible,
   const [forceLoop, setForceLoop] = useState(false);
   const [inputDiagnostic, setInputDiagnostic] = useState({ event: "none", latencyMs: 0 });
   const [displayDiagnostic, setDisplayDiagnostic] = useState({ monitor: null as string | null, dpiScale: window.devicePixelRatio || 1 });
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const runtimeMotionPaused = isRuntimeMotionPaused(settings.animationsPaused, prefersReducedMotion);
   const { machine, snapshot, animation, frameIndex, frame, diagnostics, stepFrame } = useAnimationPlayer(character, {
-    paused: settings.animationsPaused || updateSuspended,
+    paused: runtimeMotionPaused || updateSuspended,
     suspended: !windowVisible,
     playbackRate,
     ambientEnabled,
@@ -736,7 +882,7 @@ function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible,
     onPatch({ facing });
     if (reverseTo) transition(reverseTo, "movement-edge-reverse", true);
   }, [onPatch, transition]);
-  const motion = usePetMotion(animation, settings.facing, settings.animationsPaused || updateSuspended || !windowVisible, onMotionFacing);
+  const motion = usePetMotion(animation, settings.facing, runtimeMotionPaused || updateSuspended || !windowVisible, onMotionFacing);
 
   useEffect(() => {
     if (!settings.developerPanel || !isTauriRuntime()) return;
@@ -756,11 +902,11 @@ function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible,
     const onKeyDown = (event: KeyboardEvent) => {
       if (!event.ctrlKey || !event.shiftKey || event.key.toLowerCase() !== "d") return;
       event.preventDefault();
-      onPatch({ developerPanel: !settings.developerPanel });
+      onToggleSetting("developerPanel");
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onPatch, settings.developerPanel]);
+  }, [onToggleSetting]);
 
   return (
     <>
@@ -771,9 +917,9 @@ function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible,
         character={character} snapshot={snapshot} animation={animation} frameIndex={frameIndex} cacheCount={cacheCount}
         frameLoad={frameLoad} diagnostics={diagnostics} motion={motion} display={displayDiagnostic} input={inputDiagnostic}
         scale={settings.scale} anchor={character.manifest.anchor} hitbox={character.manifest.hitbox}
-        paused={settings.animationsPaused} playbackRate={playbackRate} ambientEnabled={ambientEnabled} randomSeed={randomSeed} forceLoop={forceLoop} showBounds={showDebugBounds}
+        paused={settings.animationsPaused} runtimePaused={runtimeMotionPaused || updateSuspended || !windowVisible} reducedMotion={prefersReducedMotion} playbackRate={playbackRate} ambientEnabled={ambientEnabled} randomSeed={randomSeed} forceLoop={forceLoop} showBounds={showDebugBounds}
         warnings={character.warnings} transitions={machine.recentTransitions}
-        onTrigger={(state) => transition(state, "developer", true)} onTogglePaused={() => onPatch({ animationsPaused: !settings.animationsPaused })}
+        onTrigger={(state) => transition(state, "developer", true)} onTogglePaused={() => onToggleSetting("animationsPaused")}
         onStepFrame={stepFrame} onPlaybackRate={setPlaybackRate} onAmbientEnabled={setAmbientEnabled} onRandomSeed={setRandomSeed} onToggleForceLoop={() => setForceLoop((value) => !value)}
         onToggleBounds={() => setShowDebugBounds((value) => !value)} onReload={onReload}
         onValidate={() => { const result = validateManifest(character.manifest); log(result.valid ? "info" : "error", result.valid ? `角色包 ${character.manifest.id} 运行时校验通过` : result.errors.join("; ")); }}

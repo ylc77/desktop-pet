@@ -7,7 +7,7 @@
 - **内置角色**：位于 `public/characters/`，随安装包公开分发，由构建期 `index.json` 注册。
 - **本地角色**：由用户通过“外观中心 → 导入角色包”安装 `.qipet`，保存到 `%LOCALAPPDATA%\dev.deskpet.framework\characters\<角色ID>`，不自动上传或并入公开安装包。
 
-两类资源使用同一个 `schemaVersion: 1` manifest 和 PNG 序列帧协议；来源只影响发现方式、删除规则和授权标记。当前正在使用的本地角色不可直接删除，必须先切换到其他可用角色。不同服装或完整造型在第一版作为独立角色包、独立 ID 和独立缩略图交付，不依赖运行时叠加服装图层。
+两类资源使用同一个 `schemaVersion: 1` manifest 和 PNG 序列帧协议；来源只影响发现方式、删除规则和授权标记。删除当前正在使用的本地角色时，应用必须先严格保存并完成切换到有效内置占位角色，确认成功后才删除本地包；任一步失败都会保留本地包。不同服装或完整造型在第一版作为独立角色包、独立 ID 和独立缩略图交付，不依赖运行时叠加服装图层。
 
 ## 目录和注册
 
@@ -24,7 +24,7 @@
       idle_0001.png
 ```
 
-建议同时提供 `preview.png`、`icon.png` 和 `metadata/`。公开内置的非 `_placeholder` 角色必须提供非空的 `metadata/license.md` 和 `metadata/source.md`；本地私人包也应保留来源与使用范围说明，方便作者自查。
+建议同时提供 `preview.png`、`icon.png`、`metadata/license.md` 和 `metadata/source.md`。公开内置的非 `_placeholder` 角色必须提供非空的两份 metadata；本地私人包也应保留来源与使用范围说明，方便作者自查。`schemaVersion: 1` 不接受任意附加文件：除协议声明的 manifest、帧索引、PNG、两个标准 metadata 文件和声明皮肤的 `skin.json` 外，其他文件都会被拒绝。
 
 构建期索引保留原有 `id`、`name`、`manifest`，并从 manifest 生成 `version`、`author`、`license`、`preview` 和 `icon` 展示元数据。旧运行时只读取原有字段时仍可正常加载。
 
@@ -49,7 +49,7 @@
 - `movement`：可选；为移动动作提供 `speed`、`acceleration`、`deceleration` 和 `edgePadding`，单位按逻辑像素/秒解释并在高 DPI 下换算。独立左右素材可用 `direction` 声明该动作朝向，并用 `reverseTo` 指向到达边缘后应切换的相反方向动作；未声明 `direction` 时继续沿用 `flipXAllowed` 的通用镜像方式。
 - `visual`：可选角色级视觉配置；`dropShadow` 可关闭轮廓阴影，`groundShadow` 是跟随锚点、可禁用的独立接触阴影层。
 - `interactions`：把 `click`、`doubleClick`、`hover`、`drag` 和 `land` 映射到资源包中的动作名，并可设置 `cooldownMs`。
-- `version`、`author`、`license`：用于外观中心展示、更新判断和授权提示；公开内置角色必须填写非空值。
+- `version`、`author`、`license`：用于外观中心展示、更新判断和授权提示；内置角色与本机导入包都必须填写非空值。
 - `preview`、`icon`：角色目录内的相对 PNG 路径。`preview` 允许 `64x64` 至 `2048x2048`、最大 `8 MiB`；`icon` 必须为 `32x32` 至 `512x512` 的正方形 PNG、最大 `2 MiB`。
 
 动作名不是核心代码枚举。资源包可以直接声明 `walk_left`、`walk_right`、`hover`、`double_click` 或其他符合命名规则的动作。`idle` 是唯一必需动作；缺失的可选动作会回退到 `idle`，不会导致主程序退出。
@@ -82,7 +82,7 @@ characters/character-id/
 - 每一帧不得随机缩放；同一动作不能明显跳位，不同动作之间应保持一致比例。
 - 透明边缘不得有明显白边、黑边或损坏像素。
 
-校验限制：单边画布最大 `4096px`、单帧最大 `16 MiB`、单个动作最多 `240` 帧、FPS 为 `1-60`。非法路径、超限图片、损坏 PNG、不连续编号、重复角色 ID、无效锚点或不兼容 `schemaVersion` 都会给出具体错误并阻止 release 构建。
+校验限制：单边画布最大 `4096px`、单帧最大 `16 MiB`、单个动作最多 `240` 帧、角色包最多 `2500` 个文件、目录文件总大小最大 `512 MiB`、帧总解码像素最大 `256M`，FPS 为 `1-60`。非法路径、超限图片、损坏 PNG、不连续编号、重复角色 ID、无效锚点或不兼容 `schemaVersion` 都会给出具体错误并阻止 release 构建。预览、图标和动画帧必须使用小写 `.png` 扩展名；角色包内的 EXE、DLL、MSI、脚本、HTML、SVG、快捷方式、注册表文件、符号链接/重解析点以及任何未被协议声明的文件都会被拒绝，且不会留下半安装目录。
 
 运行时会再次解析 manifest、以受控并发加载和解码图片，并剔除损坏的可选帧。解码引用缓存按 `frameSize` 估算 RGBA 占用，默认保留预算约为 `64 MiB`，同时仍受帧数上限约束；大画布会自动降低缓存帧数和解码并发，不能因合法但巨大的画布把数百帧长期保留在内存。缓存上限不代表角色包可以忽略素材尺寸优化。某动作全部损坏时禁用该动作；`idle` 全部损坏时回退到 `_placeholder`。角色包错误不得使主程序崩溃。
 
@@ -119,6 +119,8 @@ icon.png
 animations/
 metadata/
 ```
+
+其中 `metadata/` 只允许 `license.md` 与 `source.md`。角色包不能用额外 README、网页、脚本或可执行文件承载说明；需要公开的来源和授权文字应写入这两个标准文件。若 manifest 声明皮肤，只允许对应的 `skins/<skin-id>/skin.json`，第一版不允许在皮肤目录放置额外可执行内容。
 
 不得额外包一层 `<角色ID>/`。工具遇到同名目标文件会停止，绝不覆盖来源未知的既有包。可用标准 ZIP 检查工具只读核验内容，但交付时保留 `.qipet` 扩展名。
 

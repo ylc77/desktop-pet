@@ -20,6 +20,8 @@ interface Props {
   anchor: CharacterManifest["anchor"];
   hitbox?: CharacterManifest["hitbox"];
   paused: boolean;
+  runtimePaused: boolean;
+  reducedMotion: boolean;
   playbackRate: number;
   ambientEnabled: boolean;
   randomSeed: number | null;
@@ -42,7 +44,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function DeveloperPanel({ character, snapshot, animation, frameIndex, cacheCount, frameLoad, diagnostics, motion, display, input, scale, anchor, hitbox, paused, playbackRate, ambientEnabled, randomSeed, forceLoop, showBounds, warnings, transitions, onTrigger, onTogglePaused, onStepFrame, onPlaybackRate, onAmbientEnabled, onRandomSeed, onToggleForceLoop, onToggleBounds, onReload, onValidate, onSimulateMissingFrame, onSimulateCorruptSettings, onClose }: Props) {
+export function DeveloperPanel({ character, snapshot, animation, frameIndex, cacheCount, frameLoad, diagnostics, motion, display, input, scale, anchor, hitbox, paused, runtimePaused, reducedMotion, playbackRate, ambientEnabled, randomSeed, forceLoop, showBounds, warnings, transitions, onTrigger, onTogglePaused, onStepFrame, onPlaybackRate, onAmbientEnabled, onRandomSeed, onToggleForceLoop, onToggleBounds, onReload, onValidate, onSimulateMissingFrame, onSimulateCorruptSettings, onClose }: Props) {
   const [logs, setLogs] = useState<readonly LogEntry[]>(getLogs());
   useEffect(() => subscribeLogs(setLogs), []);
   return (
@@ -61,6 +63,7 @@ export function DeveloperPanel({ character, snapshot, animation, frameIndex, cac
         <dt>rAF</dt><dd>{diagnostics.rafFrequency} Hz</dd>
         <dt>丢弃/限幅</dt><dd>{diagnostics.droppedFrames} / {diagnostics.cappedTicks}</dd>
         <dt>播放状态</dt><dd>{diagnostics.suspended ? "暂停/隐藏" : "运行"} · {playbackRate}x</dd>
+        <dt>减少动画</dt><dd>{reducedMotion ? "跟随系统开启" : "关闭"}</dd>
         <dt>图片状态</dt><dd>{frameLoad.status} · loaded={frameLoad.loaded} failed={frameLoad.failed}</dd>
         <dt>缓存</dt><dd>{cacheCount} 帧 · 估算 {((cacheCount * character.manifest.frameSize.width * character.manifest.frameSize.height * 4) / 1024 / 1024).toFixed(1)} MiB · generation={frameLoad.generation}</dd>
         <dt>资源路径</dt><dd>{character.baseUrl}</dd>
@@ -77,7 +80,7 @@ export function DeveloperPanel({ character, snapshot, animation, frameIndex, cac
       <div className="trigger-grid">{Object.keys(character.animations).map((state) => <button key={state} onClick={() => onTrigger(state as AnimationState)}>{state}</button>)}</div>
       <div className="debug-speed-controls">
         {[0.25, 0.5, 1].map((rate) => <button className={playbackRate === rate ? "selected" : ""} key={rate} onClick={() => onPlaybackRate(rate)}>{rate}x</button>)}
-        <button onClick={onStepFrame} disabled={!paused}>前进一帧</button>
+        <button onClick={onStepFrame} disabled={!runtimePaused}>前进一帧</button>
       </div>
       <div className="debug-actions">
         <button onClick={onTogglePaused}>{paused ? "继续动画" : "暂停动画"}</button>

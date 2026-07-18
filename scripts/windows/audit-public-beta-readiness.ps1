@@ -2,6 +2,7 @@
 param(
     [string]$ResultsRoot,
     [string]$OutputDirectory,
+    [string]$ReleaseDirectory,
     [string]$UpdaterPublicKeyPath,
     [switch]$AcceptUnsignedRisk,
     [switch]$SkipLegacyDiscovery
@@ -16,15 +17,19 @@ $repo = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '
 if ([string]::IsNullOrWhiteSpace($ResultsRoot)) { $ResultsRoot = [System.IO.Path]::Combine($repo, 'qa-results', 'public-beta') }
 $root = Resolve-CallerPath -Path $ResultsRoot -BaseDirectory $InvocationDirectory
 $output = if ($OutputDirectory) { Resolve-CallerPath -Path $OutputDirectory -BaseDirectory $InvocationDirectory } else { $root }
+if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) {
+    $ReleaseDirectory = [System.IO.Path]::Combine($repo, 'release')
+} else {
+    $ReleaseDirectory = Resolve-CallerPath -Path $ReleaseDirectory -BaseDirectory $InvocationDirectory
+}
 if (-not [string]::IsNullOrWhiteSpace($UpdaterPublicKeyPath)) { $UpdaterPublicKeyPath = Resolve-CallerPath -Path $UpdaterPublicKeyPath -BaseDirectory $InvocationDirectory }
 [System.IO.Directory]::CreateDirectory($output) | Out-Null
 
 $headCommit = (& git -C $repo rev-parse HEAD).Trim()
-$releaseDirectory = [System.IO.Path]::Combine($repo, 'release')
-$releaseInstaller = Get-DeskPetReleaseInstaller -ReleaseDirectory $releaseDirectory
-$releaseVersionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory $releaseDirectory -InstallerPath $(if ($releaseInstaller) { $releaseInstaller.FullName } else { $null }) -ExplicitExpectedVersion $null
+$releaseInstaller = Get-DeskPetReleaseInstaller -ReleaseDirectory $ReleaseDirectory
+$releaseVersionContext = Resolve-DeskPetVersionContext -RepositoryRoot $repo -ReleaseDirectory $ReleaseDirectory -InstallerPath $(if ($releaseInstaller) { $releaseInstaller.FullName } else { $null }) -ExplicitExpectedVersion $null
 Assert-DeskPetVersionContext -VersionContext $releaseVersionContext
-$releaseManifestPath = [System.IO.Path]::Combine($releaseDirectory, 'release-manifest.json')
+$releaseManifestPath = [System.IO.Path]::Combine($ReleaseDirectory, 'release-manifest.json')
 $releaseManifest = if ([System.IO.File]::Exists($releaseManifestPath)) { Get-Content -LiteralPath $releaseManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
 $releaseManifestCommit = [string](Get-ObjectPropertyValue $releaseManifest 'gitCommit')
 $releaseManifestHash = [string](Get-ObjectPropertyValue $releaseManifest 'sha256')
@@ -33,7 +38,7 @@ $releaseManifestClean = $null -ne $releaseManifestDirtyValue -and -not [bool]$re
 $releaseInstallerHash = if ($releaseInstaller) { (Get-FileHash -LiteralPath $releaseInstaller.FullName -Algorithm SHA256).Hash } else { $null }
 $releaseBindingValid = -not [string]::IsNullOrWhiteSpace($releaseManifestCommit) -and $releaseManifestCommit -eq $headCommit -and
     -not [string]::IsNullOrWhiteSpace($releaseManifestHash) -and $releaseManifestHash -eq $releaseInstallerHash -and $releaseManifestClean
-$updaterReadiness = Get-DeskPetUpdaterReadiness -RepositoryRoot $repo -ReleaseDirectory $releaseDirectory -ExpectedVersion $releaseVersionContext.ExpectedVersion
+$updaterReadiness = Get-DeskPetUpdaterReadiness -RepositoryRoot $repo -ReleaseDirectory $ReleaseDirectory -ExpectedVersion $releaseVersionContext.ExpectedVersion
 $updaterPublicKeyHash = if (-not [string]::IsNullOrWhiteSpace($UpdaterPublicKeyPath) -and [System.IO.File]::Exists($UpdaterPublicKeyPath)) { Get-UpdaterPublicKeyFingerprint -PublicKeyPath $UpdaterPublicKeyPath } else { $null }
 $updaterPublicKeyVerified = -not [string]::IsNullOrWhiteSpace($updaterPublicKeyHash) -and $updaterPublicKeyHash -eq $updaterReadiness.PublicKeyFingerprint
 $updaterCryptographicSignatureAttempted = $false

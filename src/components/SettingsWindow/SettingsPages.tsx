@@ -7,6 +7,7 @@ import { InlineAlert, SettingsRow, Toggle } from "../ui";
 interface CommonPageProps {
   snapshot: DesktopControlSnapshot;
   disabled: boolean;
+  actionDisabled: boolean;
   onPatch: (patch: Partial<AppSettings>) => void;
   onAction: (action: DesktopControlAction, payload?: unknown) => void;
 }
@@ -37,7 +38,7 @@ export function GeneralSettingsPage({ snapshot, disabled, onPatch }: CommonPageP
   );
 }
 
-export function AppearanceSettingsPage({ snapshot, disabled, onPatch, onAction }: CommonPageProps) {
+export function AppearanceSettingsPage({ snapshot, disabled, actionDisabled, onPatch, onAction }: CommonPageProps) {
   const { settings, character } = snapshot;
   return (
     <section aria-labelledby="settings-section-title">
@@ -47,7 +48,7 @@ export function AppearanceSettingsPage({ snapshot, disabled, onPatch, onAction }
           <strong>{character?.name ?? "正在读取当前角色"}</strong>
           {character && <p>{character.author} · {character.version}</p>}
         </div>
-        <button type="button" className="primary" disabled={disabled} onClick={() => onAction("open-appearance")}>打开外观中心</button>
+        <button type="button" className="primary" disabled={actionDisabled} onClick={() => onAction("open-appearance")}>打开外观中心</button>
       </div>
       <div className="settings-section-card">
         <SettingsRow label={`大小 ${Math.round(settings.scale * 100)}%`} description="只改变桌宠显示大小，不修改角色素材。">
@@ -149,7 +150,7 @@ function UpdateStatus({ updater, disabled, onAction }: { updater: UpdaterSnapsho
   );
 }
 
-export function UpdateSettingsPage({ snapshot, disabled, onPatch, onAction }: CommonPageProps) {
+export function UpdateSettingsPage({ snapshot, disabled, actionDisabled, onPatch, onAction }: CommonPageProps) {
   const version = snapshot.updater.configuration?.currentVersion ?? "读取中…";
   const channel = snapshot.updater.configuration?.channel ?? "beta";
   return (
@@ -164,7 +165,7 @@ export function UpdateSettingsPage({ snapshot, disabled, onPatch, onAction }: Co
           <div><dt>更新渠道</dt><dd>{channel}</dd></div>
         </dl>
       </div>
-      <UpdateStatus updater={snapshot.updater} disabled={disabled} onAction={onAction} />
+      <UpdateStatus updater={snapshot.updater} disabled={actionDisabled} onAction={onAction} />
     </section>
   );
 }
@@ -174,7 +175,7 @@ interface AboutPageProps extends CommonPageProps {
   onRequestReset: () => void;
 }
 
-export function AboutSettingsPage({ snapshot, disabled, feedback, onAction, onRequestReset }: AboutPageProps) {
+export function AboutSettingsPage({ snapshot, actionDisabled, feedback, onAction, onRequestReset }: AboutPageProps) {
   return (
     <section aria-labelledby="settings-section-title">
       <SectionTitle description="查看版本、隐私说明以及本机诊断工具。">关于与支持</SectionTitle>
@@ -183,7 +184,7 @@ export function AboutSettingsPage({ snapshot, disabled, feedback, onAction, onRe
         channel={snapshot.updater.configuration?.channel ?? "beta"}
         lastCheckAt={snapshot.settings.updateLastCheckAt}
         character={snapshot.character as DesktopCharacterSummary | null}
-        busy={disabled}
+        busy={actionDisabled}
         feedback={feedback}
         onCheckUpdates={() => onAction("check-updates")}
         onOpenLogDirectory={() => onAction("open-log-directory")}

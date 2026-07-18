@@ -15,7 +15,7 @@
 - `%APPDATA%\dev.deskpet.framework`
 - `%LOCALAPPDATA%\dev.deskpet.framework`
 
-不得删除其父目录。`0.1.0` 已增加最长 60 秒的卸载清理轮询，但真实 CurrentMachine 卸载仍需用户确认后复测。诊断预览命令：
+不得删除其父目录。当前 QA 流程使用最长 60 秒的有界卸载清理轮询，但 `0.1.2-beta.3` 的真实 CurrentMachine 卸载仍需用户确认后复测。诊断预览命令：
 
 ```powershell
 .\scripts\windows\run-qa-suite.ps1 -Mode CurrentMachine -ResumeFromPhase Uninstallation -WhatIf
@@ -27,8 +27,8 @@
 .\scripts\windows\run-qa-suite.ps1 `
   -Mode CurrentMachine `
   -UseExistingInstallation `
-  -InstallerPath ".\release\七酱桌宠_0.1.0_x64-setup.exe" `
-  -OutputDirectory ".\qa-results-current-machine-rebrand-resume" `
+  -InstallerPath ".\release\updater\0.1.2-beta.3\qijiang-desktop-pet_0.1.2-beta.3_x64-setup.exe" `
+  -OutputDirectory ".\qa-results-current-machine-beta3-resume" `
   -WhatIf
 ```
 

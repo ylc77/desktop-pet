@@ -501,6 +501,19 @@ struct PhysicalRect {
     bottom: i32,
 }
 
+const AUXILIARY_MIN_WIDTH: f64 = 560.0;
+const AUXILIARY_MIN_HEIGHT: f64 = 360.0;
+const AUXILIARY_FRAME_WIDTH_RESERVE: f64 = 32.0;
+const AUXILIARY_FRAME_HEIGHT_RESERVE: f64 = 64.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AuxiliaryWindowLayout {
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+    pub(crate) min_width: f64,
+    pub(crate) min_height: f64,
+}
+
 impl PhysicalRect {
     fn from_window(position: PhysicalPosition<i32>, size: tauri::PhysicalSize<u32>) -> Self {
         Self {
@@ -608,6 +621,203 @@ fn centered_position(
     let x = work_area.left + (work_area.width().saturating_sub(size.width as i32)).max(0) / 2;
     let y = work_area.top + (work_area.height().saturating_sub(size.height as i32)).max(0) / 2;
     PhysicalPosition::new(x, y)
+}
+
+fn fully_visible_position(
+    position: PhysicalPosition<i32>,
+    size: tauri::PhysicalSize<u32>,
+    work_area: PhysicalRect,
+) -> PhysicalPosition<i32> {
+    let maximum_x = work_area
+        .right
+        .saturating_sub(size.width.min(i32::MAX as u32) as i32);
+    let maximum_y = work_area
+        .bottom
+        .saturating_sub(size.height.min(i32::MAX as u32) as i32);
+    PhysicalPosition::new(
+        if maximum_x < work_area.left {
+            work_area.left
+        } else {
+            position.x.clamp(work_area.left, maximum_x)
+        },
+        if maximum_y < work_area.top {
+            work_area.top
+        } else {
+            position.y.clamp(work_area.top, maximum_y)
+        },
+    )
+}
+
+fn auxiliary_window_layout_for_work_area(
+    preferred_width: f64,
+    preferred_height: f64,
+    work_area: PhysicalRect,
+    scale_factor: f64,
+) -> AuxiliaryWindowLayout {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return AuxiliaryWindowLayout {
+            width: preferred_width,
+            height: preferred_height,
+            min_width: AUXILIARY_MIN_WIDTH,
+            min_height: AUXILIARY_MIN_HEIGHT,
+        };
+    }
+    let available_width =
+        ((work_area.width() as f64 / scale_factor) - AUXILIARY_FRAME_WIDTH_RESERVE).max(1.0);
+    let available_height =
+        ((work_area.height() as f64 / scale_factor) - AUXILIARY_FRAME_HEIGHT_RESERVE).max(1.0);
+    let min_width = AUXILIARY_MIN_WIDTH.min(available_width);
+    let min_height = AUXILIARY_MIN_HEIGHT.min(available_height);
+    AuxiliaryWindowLayout {
+        width: preferred_width.min(available_width).max(min_width),
+        height: preferred_height.min(available_height).max(min_height),
+        min_width,
+        min_height,
+    }
+}
+
+fn monitor_work_area(monitor: &tauri::Monitor) -> PhysicalRect {
+    let work_area = monitor.work_area();
+    PhysicalRect {
+        left: work_area.position.x,
+        top: work_area.position.y,
+        right: work_area
+            .position
+            .x
+            .saturating_add(work_area.size.width.min(i32::MAX as u32) as i32),
+        bottom: work_area
+            .position
+            .y
+            .saturating_add(work_area.size.height.min(i32::MAX as u32) as i32),
+    }
+}
+
+fn preferred_monitor<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::Monitor> {
+    app.get_webview_window("main")
+        .and_then(|window| window.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten())
+}
+
+pub(crate) fn auxiliary_window_layout_for_app<R: Runtime>(
+    app: &AppHandle<R>,
+    preferred_width: f64,
+    preferred_height: f64,
+) -> AuxiliaryWindowLayout {
+    preferred_monitor(app)
+        .map(|monitor| {
+            auxiliary_window_layout_for_work_area(
+                preferred_width,
+                preferred_height,
+                monitor_work_area(&monitor),
+                monitor.scale_factor(),
+            )
+        })
+        .unwrap_or(AuxiliaryWindowLayout {
+            width: preferred_width,
+            height: preferred_height,
+            min_width: AUXILIARY_MIN_WIDTH,
+            min_height: AUXILIARY_MIN_HEIGHT,
+        })
+}
+
+fn fit_auxiliary_window_to_monitor<R: Runtime>(
+    window: &WebviewWindow<R>,
+    monitor: tauri::Monitor,
+    center: bool,
+) -> Result<(), String> {
+    let work_area = monitor_work_area(&monitor);
+    let inner = window
+        .inner_size()
+        .map_err(|error| format!("cannot read auxiliary inner size: {error}"))?;
+    let outer = window
+        .outer_size()
+        .map_err(|error| format!("cannot read auxiliary outer size: {error}"))?;
+    let frame_width = outer.width.saturating_sub(inner.width);
+    let frame_height = outer.height.saturating_sub(inner.height);
+    let available_inner_width = (work_area.width() as u32)
+        .saturating_sub(frame_width)
+        .max(1);
+    let available_inner_height = (work_area.height() as u32)
+        .saturating_sub(frame_height)
+        .max(1);
+    let scale_factor = monitor.scale_factor();
+    let minimum_width = if scale_factor.is_finite() && scale_factor > 0.0 {
+        (AUXILIARY_MIN_WIDTH * scale_factor).round() as u32
+    } else {
+        AUXILIARY_MIN_WIDTH as u32
+    }
+    .min(available_inner_width)
+    .max(1);
+    let minimum_height = if scale_factor.is_finite() && scale_factor > 0.0 {
+        (AUXILIARY_MIN_HEIGHT * scale_factor).round() as u32
+    } else {
+        AUXILIARY_MIN_HEIGHT as u32
+    }
+    .min(available_inner_height)
+    .max(1);
+    window
+        .set_min_size(Some(tauri::Size::Physical(tauri::PhysicalSize::new(
+            minimum_width,
+            minimum_height,
+        ))))
+        .map_err(|error| format!("cannot constrain auxiliary minimum size: {error}"))?;
+
+    let target_inner = tauri::PhysicalSize::new(
+        inner.width.min(available_inner_width).max(minimum_width),
+        inner.height.min(available_inner_height).max(minimum_height),
+    );
+    if target_inner != inner {
+        window
+            .set_size(tauri::Size::Physical(target_inner))
+            .map_err(|error| format!("cannot fit auxiliary window to work area: {error}"))?;
+    }
+    let target_outer = tauri::PhysicalSize::new(
+        target_inner.width.saturating_add(frame_width),
+        target_inner.height.saturating_add(frame_height),
+    );
+    let current_position = window
+        .outer_position()
+        .map_err(|error| format!("cannot read auxiliary position: {error}"))?;
+    let target_position = if center {
+        centered_position(target_outer, work_area)
+    } else {
+        fully_visible_position(current_position, target_outer, work_area)
+    };
+    if target_position != current_position {
+        window
+            .set_position(Position::Physical(target_position))
+            .map_err(|error| format!("cannot fit auxiliary position to work area: {error}"))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn fit_new_auxiliary_window_to_preferred_work_area<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+) -> Result<(), String> {
+    let Some(monitor) = preferred_monitor(app) else {
+        return Ok(());
+    };
+    fit_auxiliary_window_to_monitor(window, monitor, true)
+}
+
+pub(crate) fn fit_auxiliary_window_to_current_work_area<R: Runtime>(
+    window: &WebviewWindow<R>,
+    center: bool,
+) -> Result<(), String> {
+    let current = window
+        .current_monitor()
+        .map_err(|error| format!("cannot resolve current monitor: {error}"))?;
+    let monitor = match current {
+        Some(monitor) => Some(monitor),
+        None => window
+            .primary_monitor()
+            .map_err(|error| format!("cannot resolve primary monitor: {error}"))?,
+    };
+    let Some(monitor) = monitor else {
+        return Ok(());
+    };
+    fit_auxiliary_window_to_monitor(window, monitor, center)
 }
 
 #[cfg(test)]
@@ -728,10 +938,11 @@ fn clamp_window_to_visible_area<R: Runtime>(window: &WebviewWindow<R>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        centered_position, intersection_area, is_app_action_id, is_fullscreen_candidate,
-        logical_to_physical, read_settings_at_path, render_startup_diagnostic,
-        sanitize_plugin_name, summarize_startup_error, window_is_visible_in_work_area,
-        write_settings_at_path, FullscreenWindowInfo, PhysicalRect, SettingsSection,
+        auxiliary_window_layout_for_work_area, centered_position, fully_visible_position,
+        intersection_area, is_app_action_id, is_fullscreen_candidate, logical_to_physical,
+        read_settings_at_path, render_startup_diagnostic, sanitize_plugin_name,
+        summarize_startup_error, window_is_visible_in_work_area, write_settings_at_path,
+        FullscreenWindowInfo, PhysicalRect, SettingsSection,
     };
     use tauri::{PhysicalPosition, PhysicalSize};
 
@@ -839,6 +1050,78 @@ mod tests {
                 }
             ),
             PhysicalPosition::new(-1920, 0)
+        );
+    }
+
+    #[test]
+    fn auxiliary_layout_keeps_the_supported_minimum_when_the_work_area_can_hold_it() {
+        let layout = auxiliary_window_layout_for_work_area(
+            760.0,
+            600.0,
+            PhysicalRect {
+                left: 0,
+                top: 0,
+                right: 1_920,
+                bottom: 1_080,
+            },
+            1.0,
+        );
+        assert_eq!(layout.width, 760.0);
+        assert_eq!(layout.height, 600.0);
+        assert_eq!(layout.min_width, 560.0);
+        assert_eq!(layout.min_height, 360.0);
+    }
+
+    #[test]
+    fn auxiliary_layout_shrinks_for_high_dpi_and_small_work_areas() {
+        let layout = auxiliary_window_layout_for_work_area(
+            960.0,
+            720.0,
+            PhysicalRect {
+                left: -1_366,
+                top: 0,
+                right: 0,
+                bottom: 728,
+            },
+            2.0,
+        );
+        assert_eq!(layout.width, 651.0);
+        assert_eq!(layout.height, 300.0);
+        assert_eq!(layout.min_width, 560.0);
+        assert_eq!(layout.min_height, 300.0);
+
+        let very_small = auxiliary_window_layout_for_work_area(
+            760.0,
+            600.0,
+            PhysicalRect {
+                left: 0,
+                top: 0,
+                right: 480,
+                bottom: 320,
+            },
+            1.0,
+        );
+        assert_eq!(very_small.width, 448.0);
+        assert_eq!(very_small.height, 256.0);
+        assert_eq!(very_small.min_width, 448.0);
+        assert_eq!(very_small.min_height, 256.0);
+    }
+
+    #[test]
+    fn auxiliary_restore_position_is_fully_contained_in_the_work_area() {
+        let area = PhysicalRect {
+            left: -1_280,
+            top: 40,
+            right: 0,
+            bottom: 720,
+        };
+        assert_eq!(
+            fully_visible_position(
+                PhysicalPosition::new(-2_000, 700),
+                PhysicalSize::new(900, 600),
+                area,
+            ),
+            PhysicalPosition::new(-1_280, 120)
         );
     }
 
@@ -1182,7 +1465,7 @@ fn show_settings_window_for<R: Runtime>(
         window
             .show()
             .map_err(|error| format!("cannot show settings window: {error}"))?;
-        clamp_window_to_visible_area(&window);
+        fit_auxiliary_window_to_current_work_area(&window, false)?;
         window
             .set_focus()
             .map_err(|error| format!("cannot focus settings window: {error}"))?;
@@ -1198,14 +1481,15 @@ fn show_settings_window_for<R: Runtime>(
     }
 
     let initial_section = section.as_str();
-    WebviewWindowBuilder::new(
+    let layout = auxiliary_window_layout_for_app(app, 760.0, 600.0);
+    let window = WebviewWindowBuilder::new(
         app,
         "settings",
         WebviewUrl::App(format!("index.html?surface=settings&section={initial_section}").into()),
     )
     .title("七酱桌宠 · 设置")
-    .inner_size(760.0, 600.0)
-    .min_inner_size(560.0, 360.0)
+    .inner_size(layout.width, layout.height)
+    .min_inner_size(layout.min_width, layout.min_height)
     .max_inner_size(960.0, 760.0)
     .resizable(true)
     .maximizable(false)
@@ -1213,6 +1497,7 @@ fn show_settings_window_for<R: Runtime>(
     .transparent(false)
     .always_on_top(false)
     .skip_taskbar(false)
+    .visible(false)
     .center()
     .on_page_load(move |window, payload| {
         if matches!(payload.event(), PageLoadEvent::Finished) {
@@ -1227,8 +1512,12 @@ fn show_settings_window_for<R: Runtime>(
         }
     })
     .build()
-    .map(|_| ())
-    .map_err(|error| format!("cannot create settings window: {error}"))
+    .map_err(|error| format!("cannot create settings window: {error}"))?;
+    fit_new_auxiliary_window_to_preferred_work_area(app, &window)?;
+    window
+        .show()
+        .map_err(|error| format!("cannot show settings window: {error}"))?;
+    Ok(())
 }
 
 // WebView2 window creation must not run inline on the IPC event thread. On
@@ -1642,7 +1931,15 @@ pub fn run() {
                     | WindowEvent::ScaleFactorChanged { .. }
             ) {
                 if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
-                    clamp_window_to_visible_area(&webview);
+                    if matches!(window.label(), "settings" | "appearance") {
+                        if let Err(error) =
+                            fit_auxiliary_window_to_current_work_area(&webview, false)
+                        {
+                            log::warn!("cannot fit auxiliary window after display change: {error}");
+                        }
+                    } else {
+                        clamp_window_to_visible_area(&webview);
+                    }
                 }
             }
         })

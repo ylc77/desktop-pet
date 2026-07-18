@@ -1,4 +1,5 @@
-import { readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { lstat, open, readFile, readdir, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { PNG } from "pngjs";
 
@@ -16,8 +17,16 @@ const index = [];
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_FRAMES_PER_ANIMATION = 240;
 const MAX_CANVAS_EDGE = 4096;
+const MAX_ENTRIES = 2_500;
+const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const MAX_DECODED_FRAME_PIXELS = 256 * 1024 * 1024;
 const PUBLIC_CHARACTER_ROOT = path.resolve("public/characters");
 const isPublicCharacterRoot = root === PUBLIC_CHARACTER_ROOT;
+const prohibitedPackageExtensions = new Set([
+  "exe", "dll", "com", "scr", "msi", "msp", "bat", "cmd", "ps1", "psm1", "psd1",
+  "vbs", "vbe", "js", "mjs", "cjs", "html", "htm", "hta", "svg", "jar", "lnk",
+  "url", "reg", "chm",
+]);
 const assetRules = {
   preview: { maxBytes: 8 * 1024 * 1024, minWidth: 64, minHeight: 64, maxWidth: 2048, maxHeight: 2048, square: false },
   icon: { maxBytes: 2 * 1024 * 1024, minWidth: 32, minHeight: 32, maxWidth: 512, maxHeight: 512, square: true },
@@ -38,14 +47,207 @@ function optionalIndexValue(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function asciiLower(value) {
+  return value.replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 32));
+}
+
+function asciiUpper(value) {
+  return value.replace(/[a-z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) - 32));
+}
+
+function isReservedWindowsComponent(component) {
+  const base = asciiUpper(component.split(".", 1)[0]);
+  return ["CON", "PRN", "AUX", "NUL"].includes(base) || /^(?:COM|LPT)[1-9]$/u.test(base);
+}
+
+function isSafePackageRelativePath(value) {
+  if (typeof value !== "string" || !value || Buffer.byteLength(value, "utf8") > 240 || value.startsWith("/") || value.includes("\\")) return false;
+  const components = value.split("/");
+  return components.every((component) => component
+    && component !== "."
+    && component !== ".."
+    && !component.endsWith(".")
+    && !component.endsWith(" ")
+    && !/[<>:"|?*\p{Cc}]/u.test(component)
+    && !isReservedWindowsComponent(component));
+}
+
+async function inspectGeneratedFileTarget(file, label) {
+  let metadata;
+  try {
+    metadata = await lstat(file);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new Error(`${label} 无法检查 (${error.message})`);
+  }
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw new Error(`${label} 必须为非链接的普通文件`);
+  }
+  if (Number.isInteger(metadata.nlink) && metadata.nlink > 1) {
+    throw new Error(`${label} 不能为硬链接`);
+  }
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    nlink: metadata.nlink,
+    size: metadata.size,
+    mtimeMs: metadata.mtimeMs,
+  };
+}
+
+function generatedFileTargetUnchanged(before, after) {
+  if (before === null || after === null) return before === after;
+  return before.dev === after.dev
+    && before.ino === after.ino
+    && before.nlink === after.nlink
+    && before.size === after.size
+    && before.mtimeMs === after.mtimeMs;
+}
+
+async function writeGeneratedFileAtomically(file, content, label) {
+  const directory = path.dirname(file);
+  const directoryMetadata = await lstat(directory);
+  if (directoryMetadata.isSymbolicLink() || !directoryMetadata.isDirectory()) {
+    throw new Error(`${label} 的父目录必须为非链接的普通目录`);
+  }
+  const before = await inspectGeneratedFileTarget(file, label);
+  const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await open(temporary, "wx", 0o600);
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    const after = await inspectGeneratedFileTarget(file, label);
+    if (!generatedFileTargetUnchanged(before, after)) {
+      throw new Error(`${label} 在生成期间被替换，已拒绝覆盖`);
+    }
+    await rename(temporary, file);
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+    await unlink(temporary).catch(() => {});
+  }
+}
+
+let rootMetadata;
+try {
+  rootMetadata = await lstat(root);
+} catch (error) {
+  throw new Error(`角色根目录无法检查 (${error.message})`);
+}
+if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
+  throw new Error("角色根目录必须为非链接的普通目录");
+}
+
+const indexPath = path.join(root, "index.json");
+let currentIndex = null;
+try {
+  const indexMetadata = await inspectGeneratedFileTarget(indexPath, "index.json");
+  if (indexMetadata) {
+    try {
+      currentIndex = JSON.parse(await readFile(indexPath, "utf8"));
+    } catch {
+      // A malformed generated index is safely replaced only after validation succeeds.
+    }
+  }
+} catch (error) {
+  errors.push(`index.json 不安全: ${error.message}`);
+}
+
+async function validateDeclaredFileSet(characterRoot, entryName, manifest, preview, icon, frameIndex) {
+  const initialErrorCount = errors.length;
+  let fileCount = 0;
+  let totalBytes = 0;
+  let framesExistingBytes = null;
+  const allowed = new Set([
+    "manifest.json",
+    "frames.json",
+    "metadata/source.md",
+    "metadata/license.md",
+  ]);
+  for (const relative of [preview, icon]) if (relative) allowed.add(asciiLower(relative));
+  for (const frames of Object.values(frameIndex.animations)) {
+    for (const relative of frames) allowed.add(asciiLower(relative));
+  }
+  if (manifest.skins !== undefined) {
+    if (!manifest.skins || typeof manifest.skins !== "object" || Array.isArray(manifest.skins)) {
+      errors.push(`${entryName}: skins 必须为对象`);
+    } else {
+      for (const id of Object.keys(manifest.skins)) {
+        const relative = `skins/${id}/skin.json`;
+        if (!isSafePackageRelativePath(relative)) errors.push(`${entryName}: skins.${id} 路径无效`);
+        else allowed.add(asciiLower(relative));
+      }
+    }
+  }
+
+  async function visit(directory) {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      errors.push(`${entryName}: 角色目录无法读取 (${error.message})`);
+      return;
+    }
+    for (const entry of entries) {
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(characterRoot, absolute).split(path.sep).join("/");
+      if (!isSafePackageRelativePath(relative)) {
+        errors.push(`${entryName}: 包含无效文件路径 ${relative}`);
+        continue;
+      }
+      let entryStat;
+      try {
+        entryStat = await lstat(absolute);
+      } catch (error) {
+        errors.push(`${entryName}: 角色包文件无法检查: ${relative} (${error.message})`);
+        continue;
+      }
+      if (entry.isSymbolicLink() || entryStat.isSymbolicLink()) {
+        errors.push(`${entryName}: 角色包不能包含符号链接或重解析点: ${relative}`);
+      } else if (entryStat.isDirectory()) {
+        await visit(absolute);
+      } else if (entryStat.isFile()) {
+        fileCount += 1;
+        totalBytes += entryStat.size;
+        if (asciiLower(relative) === "frames.json") framesExistingBytes = entryStat.size;
+        if (Number.isInteger(entryStat.nlink) && entryStat.nlink > 1) {
+          errors.push(`${entryName}: 角色包不能包含硬链接: ${relative}`);
+          continue;
+        }
+        const extension = path.posix.extname(relative).slice(1).toLowerCase();
+        if (prohibitedPackageExtensions.has(extension)) {
+          errors.push(`${entryName}: 角色包包含禁止的可执行或脚本文件: ${relative}`);
+        } else if (!allowed.has(asciiLower(relative))) {
+          errors.push(`${entryName}: 角色包包含未声明文件: ${relative}`);
+        }
+      } else {
+        errors.push(`${entryName}: 角色包包含非常规文件: ${relative}`);
+      }
+    }
+  }
+  await visit(characterRoot);
+  return {
+    safe: errors.length === initialErrorCount,
+    fileCount,
+    totalBytes,
+    framesExistingBytes,
+  };
+}
+
 async function validateDisplayAsset(characterRoot, entryName, assetName, relative) {
   if (relative === undefined) return null;
   if (typeof relative !== "string" || !relative.trim()) {
     errors.push(`${entryName}: ${assetName} 必须为角色目录内的非空相对路径`);
     return null;
   }
-  if (path.isAbsolute(relative) || relative.split(/[\\/]+/u).includes("..")) {
+  if (!isSafePackageRelativePath(relative)) {
     errors.push(`${entryName}: ${assetName} 路径越出角色目录`);
+    return null;
+  }
+  if (!relative.endsWith(".png")) {
+    errors.push(`${entryName}: ${assetName} 必须使用小写 .png 扩展名`);
     return null;
   }
   const assetPath = path.resolve(characterRoot, relative);
@@ -92,6 +294,7 @@ async function validateDisplayAsset(characterRoot, entryName, assetName, relativ
   return relative.replaceAll("\\", "/");
 }
 
+const pendingFrameWrites = [];
 const characterEntries = (await readdir(root, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name, "en"));
 for (const entry of characterEntries) {
   if (!entry.isDirectory()) continue;
@@ -106,10 +309,10 @@ for (const entry of characterEntries) {
   if (ids.has(manifest.id)) errors.push(`${entry.name}: 重复角色 ID ${manifest.id}`);
   ids.add(manifest.id);
   if (typeof manifest.name !== "string" || !manifest.name.trim()) errors.push(`${entry.name}: name 必须为非空字符串`);
+  for (const field of ["version", "author", "license"]) {
+    if (typeof manifest[field] !== "string" || !manifest[field].trim()) errors.push(`${entry.name}: ${field} 必须为非空字符串`);
+  }
   if (isPublicCharacterRoot && entry.name !== "_placeholder") {
-    for (const field of ["version", "author", "license"]) {
-      if (typeof manifest[field] !== "string" || !manifest[field].trim()) errors.push(`${entry.name}: 公开内置角色必须提供 ${field}`);
-    }
     for (const metadataFile of ["metadata/source.md", "metadata/license.md"]) {
       const metadataPath = path.join(characterRoot, ...metadataFile.split("/"));
       if (!(await hasNonEmptyText(metadataPath))) errors.push(`${entry.name}: 公开内置角色必须提供非空的 ${metadataFile}`);
@@ -144,9 +347,11 @@ for (const entry of characterEntries) {
   const preview = await validateDisplayAsset(characterRoot, entry.name, "preview", manifest.preview);
   const icon = await validateDisplayAsset(characterRoot, entry.name, "icon", manifest.icon);
   const frameIndex = { animations: {} };
+  let decodedFramePixels = 0;
+  let decodedPixelLimitExceeded = false;
   for (const [state, animation] of Object.entries(manifest.animations ?? {})) {
     if (!stateName.test(state)) { errors.push(`${entry.name}/${state}: 动作名无效`); continue; }
-    if (!animation.path || path.isAbsolute(animation.path) || animation.path.includes("..")) { errors.push(`${entry.name}/${state}: 动画路径越出角色目录`); continue; }
+    if (!isSafePackageRelativePath(animation.path)) { errors.push(`${entry.name}/${state}: 动画路径越出角色目录`); continue; }
     if (!(animation.fps >= 1 && animation.fps <= 60)) errors.push(`${entry.name}/${state}: FPS 必须为 1-60`);
     if (typeof animation.loop !== "boolean") errors.push(`${entry.name}/${state}: loop 必须为布尔值`);
     if (animation.priority !== undefined && (!Number.isInteger(animation.priority) || animation.priority < 0 || animation.priority > 1000)) errors.push(`${entry.name}/${state}: priority 必须为 0-1000 的整数`);
@@ -178,11 +383,21 @@ for (const entry of characterEntries) {
     catch { errors.push(`${entry.name}/${state}: 动画目录不存在`); continue; }
     if (files.length === 0) { errors.push(`${entry.name}/${state}: 没有 PNG 帧`); continue; }
     if (files.length > MAX_FRAMES_PER_ANIMATION) errors.push(`${entry.name}/${state}: 帧数 ${files.length} 超过上限 ${MAX_FRAMES_PER_ANIMATION}`);
+    if (!decodedPixelLimitExceeded
+      && Number.isInteger(manifest.frameSize?.width)
+      && Number.isInteger(manifest.frameSize?.height)) {
+      decodedFramePixels += manifest.frameSize.width * manifest.frameSize.height * files.length;
+      if (decodedFramePixels > MAX_DECODED_FRAME_PIXELS) {
+        decodedPixelLimitExceeded = true;
+        errors.push(`${entry.name}: 角色帧总解码像素超过 ${MAX_DECODED_FRAME_PIXELS} 上限`);
+      }
+    }
     const dimensions = new Set();
     for (let i = 0; i < files.length; i += 1) {
       const match = frameName.exec(files[i]);
       if (!match || match[1] !== state) errors.push(`${entry.name}/${state}/${files[i]}: 帧名应为 ${state}_0001.png 格式`);
       else if (Number(match[2]) !== i + 1) errors.push(`${entry.name}/${state}: 帧编号不连续，发现 ${files[i]}`);
+      if (decodedPixelLimitExceeded) continue;
       try {
         const framePath = path.join(directory, files[i]);
         const frameStat = await stat(framePath);
@@ -213,7 +428,28 @@ for (const entry of characterEntries) {
     const reverseTarget = animation?.movement?.reverseTo;
     if (reverseTarget && !manifest.animations?.[reverseTarget]) warnings.push(`${entry.name}/${state}: movement.reverseTo 指向缺失动作 ${reverseTarget}`);
   }
-  await writeFile(path.join(characterRoot, "frames.json"), JSON.stringify(frameIndex, null, 2) + "\n");
+  const generatedFrames = JSON.stringify(frameIndex, null, 2) + "\n";
+  const packageFileSet = await validateDeclaredFileSet(characterRoot, entry.name, manifest, preview, icon, frameIndex);
+  let resourceLimitExceeded = decodedPixelLimitExceeded;
+  const projectedEntries = packageFileSet.fileCount + (packageFileSet.framesExistingBytes === null ? 1 : 0);
+  if (projectedEntries > MAX_ENTRIES) {
+    errors.push(`${entry.name}: 角色包文件数 ${projectedEntries} 超过上限 ${MAX_ENTRIES}`);
+    resourceLimitExceeded = true;
+  }
+  const projectedBytes = packageFileSet.totalBytes
+    - (packageFileSet.framesExistingBytes ?? 0)
+    + Buffer.byteLength(generatedFrames, "utf8");
+  if (projectedBytes > MAX_ARCHIVE_BYTES) {
+    errors.push(`${entry.name}: 角色包文件总大小超过 512 MiB 上限`);
+    resourceLimitExceeded = true;
+  }
+  if (packageFileSet.safe && !resourceLimitExceeded) {
+    pendingFrameWrites.push({
+      file: path.join(characterRoot, "frames.json"),
+      content: generatedFrames,
+      label: `${entry.name}/frames.json`,
+    });
+  }
   index.push({
     id: manifest.id,
     name: manifest.name,
@@ -227,19 +463,21 @@ for (const entry of characterEntries) {
   console.log(`✓ ${manifest.id}: ${Object.keys(frameIndex.animations).length} 个动作`);
 }
 
-const indexPath = path.join(root, "index.json");
-let currentIndex = null;
-try {
-  currentIndex = JSON.parse(await readFile(indexPath, "utf8"));
-} catch {
-  // A missing or malformed generated index is replaced after validation succeeds.
-}
-
-if (JSON.stringify(currentIndex?.characters) !== JSON.stringify(index)) {
-  await writeFile(
-    indexPath,
-    JSON.stringify({ generatedAt: new Date().toISOString(), characters: index }, null, 2) + "\n",
-  );
+if (errors.length === 0) {
+  try {
+    for (const pending of pendingFrameWrites) {
+      await writeGeneratedFileAtomically(pending.file, pending.content, pending.label);
+    }
+    if (JSON.stringify(currentIndex?.characters) !== JSON.stringify(index)) {
+      await writeGeneratedFileAtomically(
+        indexPath,
+        JSON.stringify({ generatedAt: new Date().toISOString(), characters: index }, null, 2) + "\n",
+        "index.json",
+      );
+    }
+  } catch (error) {
+    errors.push(`生成文件安全写入失败: ${error.message}`);
+  }
 }
 console.log(`发现 ${index.length} 个角色。`);
 for (const warning of warnings) console.warn(`警告: ${warning}`);
