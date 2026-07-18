@@ -69,10 +69,12 @@ function createRequestId(): string {
 }
 
 function CharacterPreview({ entry }: { entry: CharacterCatalogEntry }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [entry.previewUrl]);
-  if (!entry.previewUrl || failed) return <div className="appearance-preview-empty" aria-label="没有预览图">暂无预览</div>;
-  return <img className="appearance-preview" src={entry.previewUrl} alt={`${entry.name} 预览`} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const previewUrl = entry.previewUrl;
+  if (!previewUrl || failedUrl === previewUrl) {
+    return <div className="appearance-preview-empty" aria-label="没有预览图">暂无预览</div>;
+  }
+  return <img className="appearance-preview" src={previewUrl} alt={`${entry.name} 预览`} loading="lazy" decoding="async" onError={() => setFailedUrl(previewUrl)} />;
 }
 
 function ConfirmRemoveDialog({ entry, onCancel, onConfirm }: {

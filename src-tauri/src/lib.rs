@@ -16,6 +16,26 @@ use tauri::{
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::RotationStrategy;
 
+pub(crate) fn run_on_main_thread_with_result<R, T, F>(
+    app: &AppHandle<R>,
+    action: F,
+) -> Result<T, String>
+where
+    R: Runtime,
+    T: Send + 'static,
+    F: FnOnce(AppHandle<R>) -> Result<T, String> + Send + 'static,
+{
+    let action_app = app.clone();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    app.run_on_main_thread(move || {
+        let _ = sender.send(action(action_app));
+    })
+    .map_err(|error| format!("cannot schedule window operation: {error}"))?;
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .map_err(|error| format!("window operation did not complete: {error}"))?
+}
+
 #[derive(Default)]
 struct SettingsFileLock(Mutex<()>);
 
@@ -1211,13 +1231,16 @@ fn show_settings_window_for<R: Runtime>(
     .map_err(|error| format!("cannot create settings window: {error}"))
 }
 
-#[tauri::command]
+// WebView2 window creation must not run inline on the IPC event thread. On
+// Windows that can leave the new webview at about:blank while `build()` waits
+// for the same event loop to finish initialization.
+#[tauri::command(async)]
 fn show_settings_window<R: Runtime>(
     app: AppHandle<R>,
     section: Option<String>,
 ) -> Result<(), String> {
     let section = SettingsSection::parse(section.as_deref())?;
-    show_settings_window_for(&app, section)
+    run_on_main_thread_with_result(&app, move |app| show_settings_window_for(&app, section))
 }
 
 fn native_menu_state<R: Runtime>(app: &AppHandle<R>) -> NativeMenuState {

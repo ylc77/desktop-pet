@@ -38,6 +38,7 @@ describe("release engineering safeguards", () => {
       "scripts/windows/uninstall-smoke-test.ps1",
       "scripts/windows/process-smoke-test.ps1",
       "scripts/windows/startup-smoke-test.ps1",
+      "scripts/windows/dynamic-window-smoke-test.mjs",
       "scripts/windows/check-autostart.ps1",
       "scripts/windows/check-leftovers.ps1",
       "scripts/windows/monitor-process.ps1",
@@ -45,6 +46,29 @@ describe("release engineering safeguards", () => {
     for (const file of files) expect(existsSync(resolve(root, file)), file).toBe(true);
     expect(readFileSync(resolve(root, "scripts/windows/install-smoke-test.ps1"), "utf8")).toContain("SupportsShouldProcess");
     expect(readFileSync(resolve(root, "scripts/windows/uninstall-smoke-test.ps1"), "utf8")).toContain("SupportsShouldProcess");
+  });
+
+  it("creates secondary WebView2 windows outside the synchronous IPC event thread", () => {
+    const rust = readFileSync(resolve(root, "src-tauri/src/lib.rs"), "utf8");
+    const catalog = readFileSync(resolve(root, "src-tauri/src/character_catalog.rs"), "utf8");
+    expect(rust).toMatch(/#\[tauri::command\(async\)\]\s*fn show_settings_window/);
+    expect(catalog).toMatch(/#\[tauri::command\(async\)\]\s*pub fn show_appearance_window/);
+    expect(rust).toContain("run_on_main_thread_with_result(&app");
+    expect(catalog).toContain("run_on_main_thread_with_result(&app");
+  });
+
+  it("does not let Vite watch Rust build output on Windows", () => {
+    const vite = readFileSync(resolve(root, "vite.config.ts"), "utf8");
+    expect(vite).toContain('"**/src-tauri/target/**"');
+  });
+
+  it("runs a rendered secondary-window smoke test in Safe QA", () => {
+    const dispatcher = readFileSync(resolve(root, "scripts/windows/run-qa-suite.ps1"), "utf8");
+    const smoke = readFileSync(resolve(root, "scripts/windows/dynamic-window-smoke-test.mjs"), "utf8");
+    expect(dispatcher).toContain("Secondary window render smoke test");
+    expect(smoke).toContain("show_settings_window");
+    expect(smoke).toContain("show_appearance_window");
+    expect(smoke).toContain("aboutBlankTargetCount");
   });
 
   it("keeps developer diagnostics behind the production build gate", () => {

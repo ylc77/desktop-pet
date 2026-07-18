@@ -186,6 +186,8 @@ try {
     else { [void](Invoke-QACommand 'NSIS release build' 'npm run build:release') }
     $releaseExecutable = [System.IO.Path]::Combine($repo, 'src-tauri', 'target', 'release', $script:ExecutableName)
     [void](Invoke-QACommand 'Release startup smoke test' "& .\scripts\windows\startup-smoke-test.ps1 -ExecutablePath '$($releaseExecutable.Replace("'", "''"))' -MinimumUptimeSeconds 10")
+    $dynamicWindowResult = [System.IO.Path]::Combine($output, 'dynamic-window-smoke.json')
+    [void](Invoke-QACommand 'Secondary window render smoke test' "& node .\scripts\windows\dynamic-window-smoke-test.mjs --executable '$($releaseExecutable.Replace("'", "''"))' --result '$($dynamicWindowResult.Replace("'", "''"))'")
     [void](Invoke-QACommand 'Release manifest generation' "& .\scripts\create-release-manifest.ps1 -TestSummary @('QA Safe suite')")
     [void](Invoke-QACommand 'Signature, hash and manifest verification' '& .\scripts\windows\verify-release-artifacts.ps1')
     [void](Invoke-QACommand 'PowerShell syntax' '$e=@(); Get-ChildItem .\scripts -Filter *.ps1 -Recurse | ForEach-Object { try { [void][scriptblock]::Create((Get-Content -Raw -Encoding UTF8 $_.FullName)) } catch { $e += $_.Exception.Message } }; if($e.Count){$e;exit 1}else{exit 0}')

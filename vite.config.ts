@@ -4,8 +4,11 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
-  server: { port: 1420, strictPort: true },
+  server: {
+    port: 1420,
+    strictPort: true,
+    watch: { ignored: ["**/src-tauri/target/**", "**/qa-results*/**"] },
+  },
   envPrefix: ["VITE_", "TAURI_"],
   build: { target: "chrome105", minify: !process.env.TAURI_DEBUG, sourcemap: Boolean(process.env.TAURI_DEBUG) },
 });
-

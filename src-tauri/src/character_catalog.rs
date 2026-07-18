@@ -1769,9 +1769,11 @@ pub fn show_appearance_window_for<R: Runtime>(app: &AppHandle<R>) -> Result<(), 
         .map_err(|error| format!("无法创建外观中心: {error}"))
 }
 
-#[tauri::command]
+// Dispatch WebView2 construction away from the IPC event thread. Keeping this
+// command synchronous on Windows can deadlock navigation at about:blank.
+#[tauri::command(async)]
 pub fn show_appearance_window<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    show_appearance_window_for(&app)
+    crate::run_on_main_thread_with_result(&app, |app| show_appearance_window_for(&app))
 }
 
 #[cfg(test)]
