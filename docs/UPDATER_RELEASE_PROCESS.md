@@ -1,6 +1,6 @@
 # Updater 发布流程
 
-> 当前决策（2026-07-17）：生产密钥、独立备份、公钥和 GitHub Releases beta endpoint 已由项目所有者确认。本阶段只准备并验证 `0.1.1-beta.1` 与 `0.1.2-beta.1` 本地产物；未经再次授权不创建、修改或上传任何远端 Release。
+> 当前决策（2026-07-18）：生产密钥、独立备份、公钥和 GitHub Releases beta endpoint 已由项目所有者确认。`0.1.2-beta.1` 已发布；后续修复候选必须使用递增版本重新构建和签名，未经再次授权不创建、修改或上传新的远端 Release。
 
 本文描述已集成但尚未投入公开使用的更新发布基础。托管使用公开仓库 `ylc77/desktop-pet` 的 GitHub Releases，稳定 endpoint 为 `https://github.com/ylc77/desktop-pet/releases/latest/download/latest.json`。Production 公钥已配置，但远端资产与真实升级尚未完成，Windows Authenticode 仍为 `NotSigned`。
 
