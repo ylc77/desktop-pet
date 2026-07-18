@@ -187,6 +187,23 @@ try {
     Test-Equal 'Read-only GitHub state accepts authenticated public exact repository' $true ([bool]($githubState.Authenticated -and $githubState.RepositoryMatches -and $githubState.PublicRepository -and $githubState.PermissionSufficient -and $githubState.HeadCommitExists))
     Test-Equal 'Operator public login is redacted in the release state' 'yl***' ([string]$githubState.OperatorLogin)
     Test-Equal 'Unused target tag, release, and asset names satisfy preflight' $true ([bool]($githubState.TargetTagStateSatisfied -and $githubState.TargetReleaseStateSatisfied -and $githubState.AssetNameStateSatisfied))
+    $priorMetadataInvoker = {
+        param([string]$FilePath, [string[]]$ArgumentList)
+        if ($ArgumentList[0] -eq 'api' -and $ArgumentList[1] -match '/releases\?') {
+            $reusedMetadata = @(
+                [System.IO.Path]::GetFileName($latestJsonPath),
+                [System.IO.Path]::GetFileName($manifestPath),
+                [System.IO.Path]::GetFileName($checksumPath)
+            ) | ForEach-Object { [ordered]@{ name=$_ } }
+            $releaseJson = @([ordered]@{ tag_name='v0.2.0-beta.1'; assets=@($reusedMetadata) }) | ConvertTo-Json -Depth 6 -Compress
+            return [pscustomobject]@{ ExitCode=0; Output=('[' + $releaseJson + ']') }
+        }
+        return & $publicGitHubInvoker $FilePath $ArgumentList
+    }.GetNewClosure()
+    $priorMetadataState = Get-GitHubUpdaterRepositoryState -Repository 'ylc77/desktop-pet' -HeadCommit $commit -Tag "v$version" `
+        -AssetNames $plannedAssetNames -GloballyUniqueAssetNames @($artifactName,[System.IO.Path]::GetFileName($signaturePath)) `
+        -ReleaseExpectation Absent -GitHubCliPath 'fixture-gh.exe' -CommandInvoker $priorMetadataInvoker
+    Test-Equal 'Metadata filenames may be reused by a newer versioned Release' $true ([bool]$priorMetadataState.AssetNameStateSatisfied)
     $capturedCommands = New-Object System.Collections.ArrayList
     $capturingInvoker = {
         param([string]$FilePath, [string[]]$ArgumentList)

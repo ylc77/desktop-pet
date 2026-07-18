@@ -37,7 +37,7 @@ $plannedAssetNames = @(
     [System.IO.Path]::GetFileName($latest), [System.IO.Path]::GetFileName($manifest), [System.IO.Path]::GetFileName($checksum)
 )
 $githubState = Get-GitHubUpdaterRepositoryState -Repository $repository -HeadCommit $gitState.Commit -Tag $tag `
-    -AssetNames $plannedAssetNames -ReleaseExpectation Absent `
+    -AssetNames $plannedAssetNames -GloballyUniqueAssetNames @($plannedAssetNames[0],$plannedAssetNames[1]) -ReleaseExpectation Absent `
     -ExpectedPrerelease (Get-GitHubHostingRequiredBoolean -InputObject (Get-GitHubHostingPropertyValue $configuration 'release') -Name 'prerelease')
 $plan = New-GitHubUpdaterReleasePlan -Configuration $configuration -Version $Version -CurrentVersion $CurrentVersion `
     -ArtifactPath $artifact -SignaturePath $signature -PublicKeyPath $publicKey -LatestJsonPath $latest `

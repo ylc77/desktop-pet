@@ -385,6 +385,7 @@ function Get-GitHubUpdaterRepositoryState {
         [Parameter(Mandatory)][string]$HeadCommit,
         [Parameter(Mandatory)][string]$Tag,
         [Parameter(Mandatory)][string[]]$AssetNames,
+        [string[]]$GloballyUniqueAssetNames,
         [ValidateSet('Absent','Draft','Present')][string]$ReleaseExpectation = 'Absent',
         [bool]$ExpectedPrerelease = $true,
         [scriptblock]$CommandInvoker,
@@ -397,6 +398,17 @@ function Get-GitHubUpdaterRepositoryState {
     foreach ($assetName in $AssetNames) {
         if ([string]::IsNullOrWhiteSpace($assetName) -or [System.IO.Path]::GetFileName($assetName) -cne $assetName -or
             -not $expectedAssetSet.Add($assetName)) {
+            return New-GitHubUpdaterRepositoryFailureState
+        }
+    }
+    if ($null -eq $GloballyUniqueAssetNames -or $GloballyUniqueAssetNames.Count -eq 0) {
+        $GloballyUniqueAssetNames = $AssetNames
+    }
+    $globalAssetSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($assetName in $GloballyUniqueAssetNames) {
+        if ([string]::IsNullOrWhiteSpace($assetName) -or
+            -not $expectedAssetSet.Contains($assetName) -or
+            -not $globalAssetSet.Add($assetName)) {
             return New-GitHubUpdaterRepositoryFailureState
         }
     }
@@ -452,7 +464,7 @@ function Get-GitHubUpdaterRepositoryState {
     $matchingAssetNames = @($releases | ForEach-Object {
         foreach ($asset in @((Get-GitHubHostingPropertyValue $_ 'assets'))) {
             $assetName = [string](Get-GitHubHostingPropertyValue $asset 'name')
-            if ($AssetNames -ccontains $assetName) { $assetName }
+            if ($GloballyUniqueAssetNames -ccontains $assetName) { $assetName }
         }
     })
     $queriesSucceeded = $true
@@ -735,7 +747,7 @@ function New-GitHubUpdaterReleasePlan {
         [pscustomobject]@{ Name='HEAD exists in target repository'; Passed=[bool](Get-GitHubHostingPropertyValue $GitHubState 'HeadCommitExists'); Details='Current commit must already exist in the configured GitHub repository.' },
         [pscustomobject]@{ Name='Target tag is unused'; Passed=[bool](Get-GitHubHostingPropertyValue $GitHubState 'TargetTagStateSatisfied'); Details='Preflight requires no matching remote tag.' },
         [pscustomobject]@{ Name='Target release is unused'; Passed=[bool](Get-GitHubHostingPropertyValue $GitHubState 'TargetReleaseStateSatisfied'); Details='Preflight requires no matching draft or published release.' },
-        [pscustomobject]@{ Name='Versioned asset names are unused'; Passed=[bool](Get-GitHubHostingPropertyValue $GitHubState 'AssetNameStateSatisfied'); Details='No existing release may contain the planned immutable filenames.' },
+        [pscustomobject]@{ Name='Versioned artifact names are unused'; Passed=[bool](Get-GitHubHostingPropertyValue $GitHubState 'AssetNameStateSatisfied'); Details='No existing release may contain the planned versioned artifact or signature filenames.' },
         [pscustomobject]@{ Name='Git worktree clean'; Passed=(-not [bool](Get-GitHubHostingPropertyValue $GitState 'DirtyWorktree')); Details='Signed release inputs must bind to a clean commit.' },
         [pscustomobject]@{ Name='Local origin repository'; Passed=[bool](Get-GitHubHostingPropertyValue $GitState 'OriginMatches'); Details='origin must resolve exactly to ylc77/desktop-pet.' },
         [pscustomobject]@{ Name='Complete release bundle validation'; Passed=$completeBundleValid; Details='Schema, identity, transition, filenames, hashes, endpoint, signature metadata, and cryptographic proof must all match.' },
