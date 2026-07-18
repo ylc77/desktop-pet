@@ -106,6 +106,9 @@ try {
         }
     }
     Write-Utf8NoBomJson -InputObject $overlay -LiteralPath $overlayPath
+    $configurationValidator = [System.IO.Path]::Combine($script:UpdaterRepositoryRoot, 'scripts', 'validate-updater-config.mjs')
+    & node $configurationValidator --base-config $tauriConfigPath --production-config $overlayPath
+    if ($LASTEXITCODE -ne 0) { throw "Signed updater configuration validation failed with exit code $LASTEXITCODE." }
     [Environment]::SetEnvironmentVariable('TAURI_SIGNING_PRIVATE_KEY', $privateKey, 'Process')
     [Environment]::SetEnvironmentVariable('TAURI_SIGNING_PRIVATE_KEY_PASSWORD', $plainPassword, 'Process')
     [Environment]::SetEnvironmentVariable('QIJIANG_UPDATER_ENDPOINT', $endpointUrl, 'Process')

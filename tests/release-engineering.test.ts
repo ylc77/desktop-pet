@@ -37,6 +37,7 @@ describe("release engineering safeguards", () => {
       "scripts/windows/install-smoke-test.ps1",
       "scripts/windows/uninstall-smoke-test.ps1",
       "scripts/windows/process-smoke-test.ps1",
+      "scripts/windows/startup-smoke-test.ps1",
       "scripts/windows/check-autostart.ps1",
       "scripts/windows/check-leftovers.ps1",
       "scripts/windows/monitor-process.ps1",

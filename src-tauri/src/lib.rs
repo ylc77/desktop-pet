@@ -620,7 +620,8 @@ fn clamp_window_to_visible_area<R: Runtime>(window: &WebviewWindow<R>) {
 mod tests {
     use super::{
         centered_position, intersection_area, is_fullscreen_candidate, logical_to_physical,
-        read_settings_at_path, window_is_visible_in_work_area, write_settings_at_path,
+        read_settings_at_path, render_startup_diagnostic, sanitize_plugin_name,
+        summarize_startup_error, window_is_visible_in_work_area, write_settings_at_path,
         FullscreenWindowInfo, PhysicalRect,
     };
     use tauri::{PhysicalPosition, PhysicalSize};
@@ -981,6 +982,33 @@ mod tests {
         assert!(directory.join(result.backup_file.unwrap()).exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
+
+    #[test]
+    fn startup_plugin_errors_are_reduced_to_non_sensitive_diagnostics() {
+        let error = tauri::Error::PluginInitialization(
+            "updater".to_string(),
+            r#"secret=C:\Users\someone\private.key; token=do-not-log"#.to_string(),
+        );
+        let summary = summarize_startup_error(&error);
+        let diagnostic = render_startup_diagnostic(&summary);
+
+        assert_eq!(summary.category, "plugin_initialization");
+        assert_eq!(summary.plugin, "updater");
+        assert!(diagnostic.contains("applicationVersion="));
+        assert!(!diagnostic.contains("Users"));
+        assert!(!diagnostic.contains("private.key"));
+        assert!(!diagnostic.contains("do-not-log"));
+    }
+
+    #[test]
+    fn unexpected_plugin_names_are_redacted() {
+        assert_eq!(sanitize_plugin_name("updater"), "updater");
+        assert_eq!(
+            sanitize_plugin_name(r#"C:\Users\someone\plugin"#),
+            "unknown"
+        );
+        assert_eq!(sanitize_plugin_name(""), "unknown");
+    }
 }
 
 fn show_main<R: Runtime>(app: &AppHandle<R>, reason: VisibilityReason) {
@@ -1079,10 +1107,90 @@ fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct StartupErrorSummary {
+    category: &'static str,
+    plugin: String,
+}
+
+fn sanitize_plugin_name(plugin: &str) -> String {
+    let trimmed = plugin.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 48
+        || !trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn summarize_startup_error(error: &tauri::Error) -> StartupErrorSummary {
+    match error {
+        tauri::Error::PluginInitialization(plugin, _) => StartupErrorSummary {
+            category: "plugin_initialization",
+            plugin: sanitize_plugin_name(plugin),
+        },
+        _ => StartupErrorSummary {
+            category: "tauri_run_error",
+            plugin: "none".to_string(),
+        },
+    }
+}
+
+fn render_startup_diagnostic(summary: &StartupErrorSummary) -> String {
+    format!(
+        "category={}\napplicationVersion={}\nplugin={}\n",
+        summary.category,
+        env!("CARGO_PKG_VERSION"),
+        summary.plugin
+    )
+}
+
+fn write_early_startup_diagnostic(error: &tauri::Error) {
+    let summary = summarize_startup_error(error);
+    let directory = std::env::temp_dir().join("qijiang-desktop-pet");
+    if std::fs::create_dir_all(&directory).is_ok() {
+        let _ = std::fs::write(
+            directory.join("startup-error.log"),
+            render_startup_diagnostic(&summary),
+        );
+    }
+}
+
+#[cfg(windows)]
+fn show_startup_error_message() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND,
+    };
+
+    let message: Vec<u16> = "七酱桌宠启动失败，请查看启动诊断日志。"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let title: Vec<u16> = "七酱桌宠"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            message.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn show_startup_error_message() {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let fullscreen_monitor = FullscreenMonitor::default();
-    tauri::Builder::default()
+    let result = tauri::Builder::default()
         .manage(fullscreen_monitor.clone())
         .manage(SettingsFileLock::default())
         .manage(character_catalog::CharacterCatalogLock::default())
@@ -1154,6 +1262,10 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run 七酱桌宠");
+        .run(tauri::generate_context!());
+    if let Err(error) = result {
+        write_early_startup_diagnostic(&error);
+        show_startup_error_message();
+        std::process::exit(1);
+    }
 }

@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory)][string]$ExecutablePath,
     [ValidateSet('Full','StartAndVerify','WaitForNormalExit')][string]$Phase = 'Full',
-    [int]$StartupSeconds = 3,
+    [ValidateRange(10, 120)][int]$StartupSeconds = 10,
     [int]$ManualExitTimeoutSeconds = 30,
     [switch]$AllowForceCleanup
 )
@@ -17,14 +17,24 @@ Assert-FileExists $executable 'Application executable'
 if ($Phase -in @('Full','StartAndVerify')) {
     if (Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue) { throw 'A desk pet process is already running.' }
     if (-not $PSCmdlet.ShouldProcess($executable, 'Launch twice to verify single-instance behavior')) { exit 0 }
+    $firstLaunch = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru
+    $startupDeadline = [DateTime]::UtcNow.AddSeconds($StartupSeconds)
+    while ([DateTime]::UtcNow -lt $startupDeadline) {
+        $firstLaunch.Refresh()
+        if ($firstLaunch.HasExited) {
+            Write-SmokeResult 'First launch survives startup interval' $false "exitCode=$($firstLaunch.ExitCode); requiredSeconds=$StartupSeconds" | Format-Table -AutoSize
+            exit 2
+        }
+        Start-Sleep -Milliseconds 250
+    }
     Start-Process -FilePath $executable -WindowStyle Hidden
-    Start-Sleep -Seconds $StartupSeconds
-    Start-Process -FilePath $executable -WindowStyle Hidden
-    Start-Sleep -Seconds $StartupSeconds
+    Start-Sleep -Seconds 2
+    $firstLaunch.Refresh()
     $instances = @(Get-Process -Name $script:ProcessName -ErrorAction SilentlyContinue)
-    $singleInstance = $instances.Count -eq 1
+    $singleInstance = -not $firstLaunch.HasExited -and $instances.Count -eq 1
     $windowTitleMatches = @($instances | Where-Object { $_.MainWindowTitle -eq $script:ProductName }).Count
     $startupResults = @(
+        Write-SmokeResult 'First launch survives startup interval' (-not $firstLaunch.HasExited) "requiredSeconds=$StartupSeconds"
         Write-SmokeResult 'Single instance after second launch' $singleInstance "count=$($instances.Count)"
         Write-SmokeResult 'Window title matches DisplayName' ($windowTitleMatches -eq 1) "expected=$script:ProductName; matches=$windowTitleMatches"
     )

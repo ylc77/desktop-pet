@@ -9,9 +9,13 @@ describe("Tauri window capabilities", () => {
   };
   const tauriConfig = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8")) as {
     bundle: { createUpdaterArtifacts: boolean };
+    plugins?: { updater?: null | { pubkey: string; endpoints: string[]; windows: { installMode: string } } };
     app: { security: { assetProtocol?: { enable: boolean; scope: { allow: string[]; deny?: string[] } } } };
   };
-  const updaterBuildConfig = JSON.parse(readFileSync("src-tauri/tauri.updater.conf.json", "utf8")) as { bundle: { createUpdaterArtifacts: boolean } };
+  const updaterBuildConfig = JSON.parse(readFileSync("src-tauri/tauri.updater.conf.json", "utf8")) as {
+    bundle: { createUpdaterArtifacts: boolean };
+    plugins?: { updater?: null | { pubkey: string; endpoints: string[]; windows: { installMode: string } } };
+  };
 
   it.each([
     "core:window:allow-hide",
@@ -25,6 +29,24 @@ describe("Tauri window capabilities", () => {
   it("keeps ordinary builds unsigned while the dedicated updater build creates artifacts", () => {
     expect(tauriConfig.bundle.createUpdaterArtifacts).toBe(false);
     expect(updaterBuildConfig.bundle.createUpdaterArtifacts).toBe(true);
+  });
+
+  it("uses a deserializable, network-disabled updater object for ordinary builds", () => {
+    expect(tauriConfig.plugins?.updater).not.toBeNull();
+    expect(tauriConfig.plugins?.updater).toEqual({
+      pubkey: "",
+      endpoints: [],
+      windows: { installMode: "passive" },
+    });
+  });
+
+  it("keeps the production overlay non-null, signed and HTTPS-only", () => {
+    const updater = updaterBuildConfig.plugins?.updater;
+    expect(updater).not.toBeNull();
+    expect(updater?.pubkey.trim().length).toBeGreaterThan(0);
+    expect(updater?.endpoints.length).toBeGreaterThan(0);
+    expect(updater?.endpoints.every((endpoint) => new URL(endpoint).protocol === "https:")).toBe(true);
+    expect(updater?.windows.installMode).toBe("passive");
   });
 
   it("grants only restart plus controlled updater commands to the main window", () => {

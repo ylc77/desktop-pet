@@ -49,7 +49,13 @@ $updaterPass = if ($RequireUpdater) {
 $baseBundle = Get-ObjectPropertyValue $script:TauriConfig 'bundle'
 $basePlugins = Get-ObjectPropertyValue $script:TauriConfig 'plugins'
 $baseUpdaterPlugin = Get-ObjectPropertyValue $basePlugins 'updater'
-$baseUpdaterDisabled = -not [bool](Get-ObjectPropertyValue $baseBundle 'createUpdaterArtifacts') -and $null -eq $baseUpdaterPlugin
+$baseUpdaterEndpoints = @(Get-ObjectPropertyValue $baseUpdaterPlugin 'endpoints')
+$baseUpdaterWindows = Get-ObjectPropertyValue $baseUpdaterPlugin 'windows'
+$baseUpdaterDisabled = -not [bool](Get-ObjectPropertyValue $baseBundle 'createUpdaterArtifacts') -and
+    $null -ne $baseUpdaterPlugin -and
+    [string]::IsNullOrWhiteSpace([string](Get-ObjectPropertyValue $baseUpdaterPlugin 'pubkey')) -and
+    $baseUpdaterEndpoints.Count -eq 0 -and
+    [string](Get-ObjectPropertyValue $baseUpdaterWindows 'installMode') -eq 'passive'
 $manifestDirtyValue = Get-ObjectPropertyValue $manifest 'dirtyWorktree'
 $checks = @(
     [pscustomobject]@{ Check = 'Installer hash matches manifest'; Passed = $hash.Hash -eq $manifest.sha256; Details = $hash.Hash }
@@ -64,7 +70,7 @@ $checks = @(
     [pscustomobject]@{ Check = 'Release metadata has no local paths'; Passed = $sensitiveHits.Count -eq 0; Details = "hits=$($sensitiveHits.Count)" }
     [pscustomobject]@{ Check = 'Updater release readiness'; Passed = $updaterPass; Details = "state=$($updater.State); required=$([bool]$RequireUpdater)" }
     [pscustomobject]@{ Check = 'Updater build overlay available'; Passed = $updater.BuildOverlayEnabled; Details = 'tauri.updater.conf.json createUpdaterArtifacts=true' }
-    [pscustomobject]@{ Check = 'Base build has no fake updater configuration'; Passed = $baseUpdaterDisabled; Details = 'base createUpdaterArtifacts=false and plugins.updater absent' }
+    [pscustomobject]@{ Check = 'Base build has a safe unconfigured updater object'; Passed = $baseUpdaterDisabled; Details = 'base createUpdaterArtifacts=false; pubkey empty; endpoints empty; installMode=passive' }
 )
 if ($updater.State -ne 'NOT_CONFIGURED') {
     $checks += @($updater.Checks | ForEach-Object {
