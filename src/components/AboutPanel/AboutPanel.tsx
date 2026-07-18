@@ -6,6 +6,7 @@ import type { AppSettings } from "../../core/settings/settingsSchema";
 import type { UpdaterStore } from "../../core/updater/updaterStore";
 import { UpdatePanel } from "../UpdatePanel/UpdatePanel";
 import appIconUrl from "../../../app-icon.png";
+import type { DesktopCharacterSummary } from "../../core/desktopControl";
 
 interface Props {
   settings: AppSettings;
@@ -15,6 +16,79 @@ interface Props {
   onInstall: () => Promise<void>;
   onReset: () => Promise<void>;
   onClose: () => void;
+}
+
+export interface AboutSupportContentProps {
+  currentVersion: string;
+  channel: "beta" | "stable";
+  lastCheckAt: string | null;
+  character: DesktopCharacterSummary | null;
+  busy?: boolean;
+  feedback?: { tone: "info" | "success" | "warning" | "danger"; message: string } | null;
+  onCheckUpdates: () => void;
+  onOpenLogDirectory: () => void;
+  onExportDiagnostics: () => void;
+  onRequestReset: () => void;
+}
+
+/** Pure about/support content used by the independent settings window. */
+export function AboutSupportContent({
+  currentVersion,
+  channel,
+  lastCheckAt,
+  character,
+  busy = false,
+  feedback,
+  onCheckUpdates,
+  onOpenLogDirectory,
+  onExportDiagnostics,
+  onRequestReset,
+}: AboutSupportContentProps) {
+  return (
+    <div className="about-support-content">
+      <section aria-labelledby="about-brand-heading">
+        <div className="about-brand">
+          <img className="about-app-icon" src={appIconUrl} alt="七酱桌宠白猫图标" />
+          <div>
+            <h2 id="about-brand-heading">七酱桌宠</h2>
+            <p>轻量、安静地陪伴在 Windows 桌面上。</p>
+          </div>
+        </div>
+        <dl className="about-metadata">
+          <div><dt>当前版本</dt><dd>{currentVersion}</dd></div>
+          <div><dt>更新渠道</dt><dd>{channel}</dd></div>
+          <div><dt>上次检查</dt><dd>{lastCheckAt ? new Date(lastCheckAt).toLocaleString("zh-CN") : "尚未检查"}</dd></div>
+          {character && <div><dt>当前角色</dt><dd>{character.name} {character.version}</dd></div>}
+        </dl>
+        <button type="button" disabled={busy} onClick={onCheckUpdates}>检查更新</button>
+      </section>
+
+      <section aria-labelledby="support-heading">
+        <h2 id="support-heading">日志与诊断</h2>
+        <p>诊断文件只保存在本机，不会自动上传；是否发送由你决定。</p>
+        <div className="panel-actions">
+          <button type="button" disabled={busy} onClick={onOpenLogDirectory}>打开日志目录</button>
+          <button type="button" disabled={busy} onClick={onExportDiagnostics}>导出脱敏诊断信息</button>
+        </div>
+        {feedback && <p className={`inline-feedback ${feedback.tone}`} role={feedback.tone === "danger" ? "alert" : "status"}>{feedback.message}</p>}
+      </section>
+
+      <details>
+        <summary>隐私说明</summary>
+        <p>更新检查需要联网，但应用不包含遥测，不上传设置、角色资源、日志或诊断包。诊断导出只由你主动触发并保存在本机。</p>
+      </details>
+      <details>
+        <summary>已知问题</summary>
+        <p>Windows 安装包的代码签名状态可能影响 SmartScreen 提示；自动更新仍需以真实两版本升级测试为准。</p>
+      </details>
+
+      <section className="danger-zone" aria-labelledby="advanced-heading">
+        <h2 id="advanced-heading">高级</h2>
+        <p>恢复默认设置不会删除已安装角色、外观包、日志、应用或用户文件。</p>
+        <button type="button" className="danger" disabled={busy} onClick={onRequestReset}>恢复默认设置</button>
+      </section>
+    </div>
+  );
 }
 
 export function AboutPanel({ settings, character, updaterStore, onPatch, onInstall, onReset, onClose }: Props) {

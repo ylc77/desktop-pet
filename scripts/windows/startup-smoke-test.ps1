@@ -36,6 +36,8 @@ $result = [ordered]@{
     observedUptimeMilliseconds=0
     survived=$false
     windowObserved=$false
+    observedWindowTitle=$null
+    windowTitleMatched=$false
     expectedWindowTitle=$ExpectedWindowTitle
     exitCode=$null
     processRemainingAfterCleanup=$false
@@ -55,13 +57,30 @@ try {
     $startInfo.WorkingDirectory = [System.IO.Path]::GetDirectoryName($executable)
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
-    $startInfo.EnvironmentVariables['LOCALAPPDATA'] = $localData
-    $startInfo.EnvironmentVariables['APPDATA'] = $roamingData
-    $startInfo.EnvironmentVariables['TEMP'] = $temporaryData
-    $startInfo.EnvironmentVariables['TMP'] = $temporaryData
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $startInfo
-    if (-not $process.Start()) { throw 'Windows did not start the application process.' }
+    # On current Windows builds, Windows PowerShell 5.1 can expose
+    # ProcessStartInfo.EnvironmentVariables as null under StrictMode. Apply
+    # the four child-only overrides to this process just long enough for the
+    # child to inherit them, then restore the QA host immediately.
+    $environmentOverrides = @{
+        LOCALAPPDATA = $localData
+        APPDATA = $roamingData
+        TEMP = $temporaryData
+        TMP = $temporaryData
+    }
+    $environmentBackup = @{}
+    try {
+        foreach ($name in $environmentOverrides.Keys) {
+            $environmentBackup[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            [Environment]::SetEnvironmentVariable($name, $environmentOverrides[$name], 'Process')
+        }
+        if (-not $process.Start()) { throw 'Windows did not start the application process.' }
+    } finally {
+        foreach ($name in $environmentBackup.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $environmentBackup[$name], 'Process')
+        }
+    }
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $deadline = [DateTime]::UtcNow.AddSeconds($MinimumUptimeSeconds)
@@ -71,9 +90,11 @@ try {
         $nativeProcess = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
         if ($nativeProcess) {
             $nativeProcess.Refresh()
-            if ($nativeProcess.MainWindowHandle -ne [IntPtr]::Zero -and
-                ([string]::IsNullOrWhiteSpace($ExpectedWindowTitle) -or $nativeProcess.MainWindowTitle -eq $ExpectedWindowTitle)) {
+            if ($nativeProcess.MainWindowHandle -ne [IntPtr]::Zero) {
                 $result.windowObserved = $true
+                $result.observedWindowTitle = $nativeProcess.MainWindowTitle
+                $result.windowTitleMatched = [string]::IsNullOrWhiteSpace($ExpectedWindowTitle) -or
+                    $nativeProcess.MainWindowTitle -eq $ExpectedWindowTitle
             }
         }
         Start-Sleep -Milliseconds 250

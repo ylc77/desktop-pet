@@ -7,15 +7,102 @@ use std::sync::{
     Arc, Mutex,
 };
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, PhysicalPosition, Position, Runtime, WebviewWindow, WindowEvent,
+    webview::PageLoadEvent,
+    AppHandle, Emitter, LogicalPosition, Manager, PhysicalPosition, Position, Runtime, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::RotationStrategy;
 
 #[derive(Default)]
 struct SettingsFileLock(Mutex<()>);
+
+#[derive(Clone, Copy, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeMenuState {
+    paused: bool,
+    always_on_top: bool,
+    autostart: bool,
+    update_busy: bool,
+}
+
+impl Default for NativeMenuState {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            always_on_top: true,
+            autostart: false,
+            update_busy: false,
+        }
+    }
+}
+
+#[derive(Default)]
+struct NativeMenuStateStore(Mutex<NativeMenuState>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsSection {
+    General,
+    Appearance,
+    Behavior,
+    Update,
+    About,
+}
+
+impl SettingsSection {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value.unwrap_or("general") {
+            "general" => Ok(Self::General),
+            "appearance" => Ok(Self::Appearance),
+            "behavior" => Ok(Self::Behavior),
+            "update" => Ok(Self::Update),
+            "about" => Ok(Self::About),
+            _ => Err("unknown settings section".to_string()),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Appearance => "appearance",
+            Self::Behavior => "behavior",
+            Self::Update => "update",
+            Self::About => "about",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsNavigation {
+    section: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeMenuSurface {
+    Pet,
+    Tray,
+}
+
+const APP_ACTION_IDS: &[&str] = &[
+    "appearance",
+    "settings",
+    "toggle-pause",
+    "hide",
+    "show",
+    "toggle-top",
+    "toggle-autostart",
+    "check-updates",
+    "about",
+    "reset",
+    "quit",
+];
+
+fn is_app_action_id(id: &str) -> bool {
+    APP_ACTION_IDS.contains(&id)
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,6 +272,7 @@ enum VisibilityReason {
     AutoHideDisabled,
     FullscreenDetected,
     FullscreenEnded,
+    MainCloseRequested,
     SingleInstance,
     TrayActivate,
     TrayHide,
@@ -197,6 +285,7 @@ impl VisibilityReason {
             Self::AutoHideDisabled => "auto-hide-disabled",
             Self::FullscreenDetected => "fullscreen-detected",
             Self::FullscreenEnded => "fullscreen-ended",
+            Self::MainCloseRequested => "main-close-requested",
             Self::SingleInstance => "single-instance",
             Self::TrayActivate => "tray-activate",
             Self::TrayHide => "tray-hide",
@@ -619,10 +708,10 @@ fn clamp_window_to_visible_area<R: Runtime>(window: &WebviewWindow<R>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        centered_position, intersection_area, is_fullscreen_candidate, logical_to_physical,
-        read_settings_at_path, render_startup_diagnostic, sanitize_plugin_name,
-        summarize_startup_error, window_is_visible_in_work_area, write_settings_at_path,
-        FullscreenWindowInfo, PhysicalRect,
+        centered_position, intersection_area, is_app_action_id, is_fullscreen_candidate,
+        logical_to_physical, read_settings_at_path, render_startup_diagnostic,
+        sanitize_plugin_name, summarize_startup_error, window_is_visible_in_work_area,
+        write_settings_at_path, FullscreenWindowInfo, PhysicalRect, SettingsSection,
     };
     use tauri::{PhysicalPosition, PhysicalSize};
 
@@ -1009,6 +1098,43 @@ mod tests {
         );
         assert_eq!(sanitize_plugin_name(""), "unknown");
     }
+
+    #[test]
+    fn settings_sections_are_strictly_whitelisted() {
+        for section in ["general", "appearance", "behavior", "update", "about"] {
+            assert_eq!(
+                SettingsSection::parse(Some(section)).unwrap().as_str(),
+                section
+            );
+        }
+        assert_eq!(
+            SettingsSection::parse(None).unwrap(),
+            SettingsSection::General
+        );
+        assert!(SettingsSection::parse(Some("developer")).is_err());
+        assert!(SettingsSection::parse(Some("../about")).is_err());
+    }
+
+    #[test]
+    fn native_menu_dispatch_only_accepts_known_actions() {
+        for action in [
+            "appearance",
+            "settings",
+            "toggle-pause",
+            "hide",
+            "show",
+            "toggle-top",
+            "toggle-autostart",
+            "check-updates",
+            "about",
+            "reset",
+            "quit",
+        ] {
+            assert!(is_app_action_id(action));
+        }
+        assert!(!is_app_action_id("developer"));
+        assert!(!is_app_action_id("unknown"));
+    }
 }
 
 fn show_main<R: Runtime>(app: &AppHandle<R>, reason: VisibilityReason) {
@@ -1025,71 +1151,288 @@ fn show_main<R: Runtime>(app: &AppHandle<R>, reason: VisibilityReason) {
     }
 }
 
-fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let pause = MenuItem::with_id(app, "toggle-pause", "暂停 / 继续动画", true, None::<&str>)?;
-    let smaller = MenuItem::with_id(app, "smaller", "缩小", true, None::<&str>)?;
-    let larger = MenuItem::with_id(app, "larger", "放大", true, None::<&str>)?;
-    let size = Submenu::with_items(app, "大小", true, &[&smaller, &larger])?;
-    let opacity_half = MenuItem::with_id(app, "opacity-half", "50%", true, None::<&str>)?;
-    let opacity_full = MenuItem::with_id(app, "opacity-full", "100%", true, None::<&str>)?;
-    let opacity = Submenu::with_items(app, "透明度", true, &[&opacity_half, &opacity_full])?;
-    let top = MenuItem::with_id(app, "toggle-top", "切换置顶", true, None::<&str>)?;
-    let autostart = MenuItem::with_id(app, "toggle-autostart", "切换开机启动", true, None::<&str>)?;
-    let character = MenuItem::with_id(app, "character", "切换角色 / 皮肤", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
-    let check_updates = MenuItem::with_id(app, "check-updates", "检查更新", true, None::<&str>)?;
-    let about = MenuItem::with_id(app, "about", "关于七酱桌宠", true, None::<&str>)?;
-    let reload = MenuItem::with_id(app, "reload", "重新加载角色资源", true, None::<&str>)?;
-    let reset = MenuItem::with_id(app, "reset", "恢复默认位置", true, None::<&str>)?;
-    let hide = MenuItem::with_id(app, "hide", "临时隐藏", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出七酱桌宠", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(
+fn show_settings_window_for<R: Runtime>(
+    app: &AppHandle<R>,
+    section: SettingsSection,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window
+            .unminimize()
+            .map_err(|error| format!("cannot restore settings window: {error}"))?;
+        window
+            .show()
+            .map_err(|error| format!("cannot show settings window: {error}"))?;
+        clamp_window_to_visible_area(&window);
+        window
+            .set_focus()
+            .map_err(|error| format!("cannot focus settings window: {error}"))?;
+        window
+            .emit(
+                "settings-navigate",
+                SettingsNavigation {
+                    section: section.as_str(),
+                },
+            )
+            .map_err(|error| format!("cannot navigate settings window: {error}"))?;
+        return Ok(());
+    }
+
+    let initial_section = section.as_str();
+    WebviewWindowBuilder::new(
         app,
-        &[
-            &pause,
-            &size,
-            &opacity,
-            &top,
-            &autostart,
-            &character,
-            &settings,
-            &check_updates,
-            &about,
-            &reload,
-            &reset,
-            &hide,
-            &separator,
-            &quit,
-        ],
+        "settings",
+        WebviewUrl::App(format!("index.html?surface=settings&section={initial_section}").into()),
+    )
+    .title("七酱桌宠 · 设置")
+    .inner_size(760.0, 600.0)
+    .min_inner_size(560.0, 360.0)
+    .max_inner_size(960.0, 760.0)
+    .resizable(true)
+    .maximizable(false)
+    .decorations(true)
+    .transparent(false)
+    .always_on_top(false)
+    .skip_taskbar(false)
+    .center()
+    .on_page_load(move |window, payload| {
+        if matches!(payload.event(), PageLoadEvent::Finished) {
+            if let Err(error) = window.emit(
+                "settings-navigate",
+                SettingsNavigation {
+                    section: initial_section,
+                },
+            ) {
+                log::warn!("cannot deliver initial settings section: {error}");
+            }
+        }
+    })
+    .build()
+    .map(|_| ())
+    .map_err(|error| format!("cannot create settings window: {error}"))
+}
+
+#[tauri::command]
+fn show_settings_window<R: Runtime>(
+    app: AppHandle<R>,
+    section: Option<String>,
+) -> Result<(), String> {
+    let section = SettingsSection::parse(section.as_deref())?;
+    show_settings_window_for(&app, section)
+}
+
+fn native_menu_state<R: Runtime>(app: &AppHandle<R>) -> NativeMenuState {
+    *app.state::<NativeMenuStateStore>()
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn main_window_is_visible<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.get_webview_window("main")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false)
+}
+
+fn build_native_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    surface: NativeMenuSurface,
+    state: NativeMenuState,
+) -> tauri::Result<Menu<R>> {
+    let appearance = MenuItem::with_id(app, "appearance", "外观中心", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let pause = CheckMenuItem::with_id(
+        app,
+        "toggle-pause",
+        "暂停动画",
+        true,
+        state.paused,
+        None::<&str>,
     )?;
+    let top = CheckMenuItem::with_id(
+        app,
+        "toggle-top",
+        "始终置顶",
+        true,
+        state.always_on_top,
+        None::<&str>,
+    )?;
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "toggle-autostart",
+        "开机启动",
+        true,
+        state.autostart,
+        None::<&str>,
+    )?;
+    let check_updates = MenuItem::with_id(
+        app,
+        "check-updates",
+        if state.update_busy {
+            "更新正在进行"
+        } else {
+            "检查更新"
+        },
+        !state.update_busy,
+        None::<&str>,
+    )?;
+    let about = MenuItem::with_id(app, "about", "关于七酱桌宠", true, None::<&str>)?;
+    let reset = MenuItem::with_id(app, "reset", "恢复默认位置", true, None::<&str>)?;
+    let visible = main_window_is_visible(app);
+    let visibility = MenuItem::with_id(
+        app,
+        if visible { "hide" } else { "show" },
+        if visible {
+            "隐藏桌宠"
+        } else {
+            "显示桌宠"
+        },
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit",
+        if state.update_busy {
+            "更新安装中，暂不可退出"
+        } else {
+            "退出七酱桌宠"
+        },
+        !state.update_busy,
+        None::<&str>,
+    )?;
+    let separator_one = PredefinedMenuItem::separator(app)?;
+    let separator_two = PredefinedMenuItem::separator(app)?;
+    let separator_three = PredefinedMenuItem::separator(app)?;
+
+    match surface {
+        NativeMenuSurface::Pet => Menu::with_items(
+            app,
+            &[
+                &appearance,
+                &settings,
+                &separator_one,
+                &pause,
+                &visibility,
+                &separator_two,
+                &autostart,
+                &check_updates,
+                &about,
+                &separator_three,
+                &quit,
+            ],
+        ),
+        NativeMenuSurface::Tray => Menu::with_items(
+            app,
+            &[
+                &visibility,
+                &appearance,
+                &settings,
+                &separator_one,
+                &pause,
+                &top,
+                &autostart,
+                &separator_two,
+                &check_updates,
+                &about,
+                &separator_three,
+                &reset,
+                &quit,
+            ],
+        ),
+    }
+}
+
+fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let menu = build_native_menu(app, NativeMenuSurface::Tray, native_menu_state(app))
+        .map_err(|error| format!("cannot build tray menu: {error}"))?;
+    let tray = app
+        .tray_by_id("main-tray")
+        .ok_or_else(|| "main tray is not available".to_string())?;
+    tray.set_menu(Some(menu))
+        .map_err(|error| format!("cannot refresh tray menu: {error}"))
+}
+
+#[tauri::command]
+fn sync_native_menu_state<R: Runtime>(
+    app: AppHandle<R>,
+    state: NativeMenuState,
+) -> Result<(), String> {
+    *app.state::<NativeMenuStateStore>()
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = state;
+    refresh_tray_menu(&app)
+}
+
+#[tauri::command]
+fn show_pet_context_menu<R: Runtime>(
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
+    x: f64,
+    y: f64,
+    state: NativeMenuState,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("pet context menu is only available from the main window".to_string());
+    }
+    if !x.is_finite() || !y.is_finite() {
+        return Err("pet context menu position must be finite".to_string());
+    }
+
+    *app.state::<NativeMenuStateStore>()
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = state;
+    if let Err(error) = refresh_tray_menu(&app) {
+        log::warn!("cannot synchronize tray menu before context popup: {error}");
+    }
+
+    let scale_factor = window
+        .scale_factor()
+        .map_err(|error| format!("cannot read context menu scale factor: {error}"))?;
+    let size: tauri::LogicalSize<f64> = window
+        .inner_size()
+        .map_err(|error| format!("cannot read context menu window size: {error}"))?
+        .to_logical(scale_factor);
+    let position = Position::Logical(LogicalPosition::new(
+        x.clamp(0.0, size.width),
+        y.clamp(0.0, size.height),
+    ));
+    let menu = build_native_menu(&app, NativeMenuSurface::Pet, state)
+        .map_err(|error| format!("cannot build pet context menu: {error}"))?;
+    window
+        .popup_menu_at(&menu, position)
+        .map_err(|error| format!("cannot show pet context menu: {error}"))
+}
+
+fn dispatch_app_action<R: Runtime>(app: &AppHandle<R>, action: &str) {
+    if !is_app_action_id(action) {
+        log::warn!("ignored unknown native menu action");
+        return;
+    }
+
+    match action {
+        "hide" => {
+            if let Some(window) = app.get_webview_window("main") {
+                set_native_visibility(&window, false, VisibilityReason::TrayHide);
+            }
+        }
+        "show" => show_main(app, VisibilityReason::TrayActivate),
+        _ => {}
+    }
+
+    if let Err(error) = app.emit_to("main", "app-action", action) {
+        log::warn!("cannot deliver native menu action to main window: {error}");
+    }
+}
+
+fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    let menu = build_native_menu(app, NativeMenuSurface::Tray, native_menu_state(app))?;
 
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
         .tooltip("七酱桌宠")
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "quit" => app.exit(0),
-            "hide" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    set_native_visibility(&window, false, VisibilityReason::TrayHide);
-                }
-            }
-            "reset" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.set_position(Position::Physical(PhysicalPosition::new(40, 40)));
-                    show_main(app, VisibilityReason::TrayReset);
-                }
-            }
-            "character" => {
-                if let Err(error) = character_catalog::show_appearance_window_for(app) {
-                    log::warn!("cannot open appearance center: {error}");
-                }
-            }
-            action => {
-                let _ = app.emit("tray-action", action);
-            }
-        })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -1193,6 +1536,7 @@ pub fn run() {
     let result = tauri::Builder::default()
         .manage(fullscreen_monitor.clone())
         .manage(SettingsFileLock::default())
+        .manage(NativeMenuStateStore::default())
         .manage(character_catalog::CharacterCatalogLock::default())
         .manage(character_catalog::ActiveCharacterState::default())
         .manage(updater::UpdaterState::default())
@@ -1201,6 +1545,9 @@ pub fn run() {
             quit_app,
             flush_application_logs,
             restore_main_window,
+            show_settings_window,
+            show_pet_context_menu,
+            sync_native_menu_state,
             read_settings_file,
             write_settings_file,
             quarantine_invalid_settings_file,
@@ -1241,6 +1588,7 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .on_menu_event(|app, event| dispatch_app_action(app, event.id.as_ref()))
         .setup(move |app| {
             build_tray(app.handle())?;
             if let Some(window) = app.get_webview_window("main") {
@@ -1250,6 +1598,19 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    if let Some(webview) = window.app_handle().get_webview_window("main") {
+                        set_native_visibility(
+                            &webview,
+                            false,
+                            VisibilityReason::MainCloseRequested,
+                        );
+                    }
+                }
+                return;
+            }
             if matches!(
                 event,
                 WindowEvent::Moved(_)

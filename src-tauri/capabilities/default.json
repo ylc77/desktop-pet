@@ -35,6 +35,9 @@
     "allow-open-log-directory",
     "allow-export-diagnostics",
     "allow-flush-application-logs",
-    "allow-restore-main-window"
+    "allow-restore-main-window",
+    "allow-show-settings-window",
+    "allow-show-pet-context-menu",
+    "allow-sync-native-menu-state"
   ]
 }

@@ -10,6 +10,7 @@ import {
   type CharacterSelectionRequest,
 } from "../../core/character/CharacterCatalog";
 import { log } from "../../core/diagnostics/logger";
+import { isTauriRuntime } from "../../core/window/windowController";
 
 export interface AppearanceCenterApi {
   list: (signal?: AbortSignal) => Promise<CharacterCatalogEntry[]>;
@@ -20,11 +21,24 @@ export interface AppearanceCenterApi {
   currentCharacterId: () => Promise<string>;
 }
 
+const browserPreviewSelectionListeners = new Set<(change: CharacterSelectionChanged) => void>();
+let browserPreviewCurrentCharacterId = "_placeholder";
+
 const defaultApi: AppearanceCenterApi = {
   list: loadCharacterCatalog,
   importPackage: importCharacterPackage,
   remove: removeInstalledCharacter,
   requestSelection: async (selection) => {
+    if (!isTauriRuntime()) {
+      browserPreviewCurrentCharacterId = selection.id;
+      queueMicrotask(() => browserPreviewSelectionListeners.forEach((handler) => handler({
+        id: selection.id,
+        source: selection.source ?? "bundled",
+        requestId: selection.requestId,
+        ok: true,
+      })));
+      return;
+    }
     await invoke("request_character_selection", {
       id: selection.id,
       source: selection.source,
@@ -32,8 +46,16 @@ const defaultApi: AppearanceCenterApi = {
       expiresAtMs: selection.expiresAtMs,
     });
   },
-  listenSelectionChanged: (handler) => listen<CharacterSelectionChanged>("character-selection-changed", (event) => handler(event.payload)),
-  currentCharacterId: async () => (await invoke<string | null>("get_selected_character_id")) ?? "_placeholder",
+  listenSelectionChanged: async (handler) => {
+    if (!isTauriRuntime()) {
+      browserPreviewSelectionListeners.add(handler);
+      return () => { browserPreviewSelectionListeners.delete(handler); };
+    }
+    return listen<CharacterSelectionChanged>("character-selection-changed", (event) => handler(event.payload));
+  },
+  currentCharacterId: async () => isTauriRuntime()
+    ? (await invoke<string | null>("get_selected_character_id")) ?? "_placeholder"
+    : browserPreviewCurrentCharacterId,
 };
 
 function messageOf(error: unknown): string {
@@ -53,6 +75,60 @@ function CharacterPreview({ entry }: { entry: CharacterCatalogEntry }) {
   return <img className="appearance-preview" src={entry.previewUrl} alt={`${entry.name} 预览`} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
 }
 
+function ConfirmRemoveDialog({ entry, onCancel, onConfirm }: {
+  entry: CharacterCatalogEntry;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+
+  return (
+    <div className="appearance-confirm-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onCancel();
+    }}>
+      <div
+        ref={dialogRef}
+        className="appearance-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="appearance-remove-title"
+        aria-describedby="appearance-remove-description"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
+          if (controls.length === 0) return;
+          const first = controls[0];
+          const last = controls[controls.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }}
+      >
+        <h2 id="appearance-remove-title">删除角色</h2>
+        <p id="appearance-remove-description">确定从本机删除“{entry.name}”吗？删除后需要重新导入才能再次使用。</p>
+        <div className="appearance-card-actions">
+          <button ref={cancelRef} type="button" onClick={onCancel}>取消</button>
+          <button type="button" className="danger" onClick={onConfirm}>删除角色</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const DEFAULT_SELECTION_TIMEOUT_MS = 120_000;
 const SELECTION_REQUEST_LIFETIME_MS = 110_000;
 
@@ -68,8 +144,10 @@ export function AppearanceCenter({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "info" | "error"; text: string } | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<CharacterCatalogEntry | null>(null);
   const pendingRequestId = useRef<string | null>(null);
   const selectionTimeout = useRef<number | null>(null);
+  const removalTrigger = useRef<HTMLElement | null>(null);
 
   const clearSelectionTimeout = useCallback(() => {
     if (selectionTimeout.current !== null) window.clearTimeout(selectionTimeout.current);
@@ -184,9 +262,27 @@ export function AppearanceCenter({
 
   const activeEntry = entries.find((entry) => entry.id === currentId && entry.valid);
 
-  const remove = async (entry: CharacterCatalogEntry) => {
+  const restoreRemovalFocus = () => {
+    const target = removalTrigger.current;
+    removalTrigger.current = null;
+    window.setTimeout(() => target?.focus(), 0);
+  };
+
+  const cancelRemoval = () => {
+    setPendingRemoval(null);
+    restoreRemovalFocus();
+  };
+
+  const requestRemoval = (entry: CharacterCatalogEntry) => {
     const current = entry.id === activeEntry?.id && entry.source === activeEntry.source;
-    if (current || !window.confirm(`确定从本机删除“${entry.name}”吗？`)) return;
+    if (current) return;
+    removalTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPendingRemoval(entry);
+  };
+
+  const remove = async (entry: CharacterCatalogEntry) => {
+    setPendingRemoval(null);
+    removalTrigger.current = null;
     setBusy(`remove:${entry.id}`);
     setFeedback(null);
     try {
@@ -200,41 +296,75 @@ export function AppearanceCenter({
     }
   };
 
-  return (
-    <main className="appearance-window-page">
-      <header className="appearance-header">
-        <div><p className="appearance-eyebrow">七酱桌宠</p><h1>外观中心</h1><p>选择已制作的角色。每套服装在首版中作为独立外观显示。</p><p className="appearance-legal">公开内置角色必须具有明确授权；本机私用导入内容由导入者负责。</p></div>
-        <div className="appearance-toolbar">
-          <button type="button" onClick={() => void refresh()} disabled={loading || busy !== null}>刷新</button>
-          <button type="button" className="primary" onClick={() => void importPackage()} disabled={loading || busy !== null}>{busy === "import" ? "正在导入…" : "导入角色包"}</button>
-        </div>
-      </header>
+  const bundledEntries = entries.filter((entry) => entry.source === "bundled");
+  const localEntries = entries.filter((entry) => entry.source === "local");
+  const interactionBlocked = busy !== null || pendingRemoval !== null;
 
-      {feedback && <p role="status" className={`appearance-feedback ${feedback.kind}`}>{feedback.text}</p>}
-      {loading && entries.length === 0 ? <p className="appearance-loading">正在读取外观…</p> : (
-        <section className="appearance-grid" aria-label="可用外观">
-          {entries.map((entry) => {
-            const current = entry.id === activeEntry?.id && entry.source === activeEntry.source;
-            const selectBusy = busy === `select:${entry.source}:${entry.id}`;
-            return (
-              <article aria-label={`${entry.name} 外观`} className={`appearance-card ${current ? "current" : ""} ${entry.valid ? "" : "broken"}`} key={`${entry.source}:${entry.id}`}>
-                <CharacterPreview entry={entry} />
-                <div className="appearance-card-body">
-                  <div className="appearance-card-title"><h2>{entry.name}</h2><span className={`source-badge ${entry.source}`}>{entry.source === "bundled" ? "官方" : "本机私用"}</span></div>
-                  <dl><div><dt>作者</dt><dd>{entry.author}</dd></div><div><dt>版本</dt><dd>{entry.version}</dd></div><div><dt>许可</dt><dd>{entry.license}</dd></div></dl>
-                  {current && <p className="appearance-current">当前使用</p>}
-                  {!entry.valid && <div className="appearance-errors"><strong>资源损坏</strong>{entry.errors.map((error, index) => <p key={`${error}:${index}`}>{error}</p>)}</div>}
-                  <div className="appearance-card-actions">
-                    <button type="button" className="primary" disabled={!entry.valid || current || busy !== null} onClick={() => void select(entry)}>{selectBusy ? "正在验证…" : current ? "使用中" : "使用此外观"}</button>
-                    {entry.source === "local" && <button type="button" className="danger" disabled={current || busy !== null} title={current ? "当前使用的外观不能删除" : undefined} onClick={() => void remove(entry)}>删除</button>}
-                  </div>
+  const renderEntry = (entry: CharacterCatalogEntry) => {
+    const current = entry.id === activeEntry?.id && entry.source === activeEntry.source;
+    const selectBusy = busy === `select:${entry.source}:${entry.id}` || busy === `select:local:${entry.id}`;
+    const deleteDescriptionId = `appearance-delete-description-${entry.source}-${entry.id}`;
+    return (
+      <article aria-label={`${entry.name} 外观`} className={`appearance-card ${current ? "current" : ""} ${entry.valid ? "" : "broken"}`} key={`${entry.source}:${entry.id}`}>
+        <CharacterPreview entry={entry} />
+        <div className="appearance-card-body">
+          <div className="appearance-card-title"><h3>{entry.name}</h3><span className={`source-badge ${entry.source}`}>{entry.source === "bundled" ? "官方" : "本机私用"}</span></div>
+          <dl><div><dt>作者</dt><dd>{entry.author}</dd></div><div><dt>版本</dt><dd>{entry.version}</dd></div><div><dt>许可</dt><dd>{entry.license}</dd></div></dl>
+          {current && <p className="appearance-current">当前使用</p>}
+          {!entry.valid && <div className="appearance-errors"><strong>资源损坏</strong>{entry.errors.map((error, index) => <p key={`${error}:${index}`}>{error}</p>)}</div>}
+          <div className="appearance-card-actions">
+            <button type="button" className="primary" disabled={!entry.valid || current || interactionBlocked} onClick={() => void select(entry)}>{selectBusy ? "正在验证…" : current ? "使用中" : "使用此外观"}</button>
+            {entry.source === "local" && <button type="button" className="danger" disabled={current || interactionBlocked} aria-describedby={current ? deleteDescriptionId : undefined} onClick={() => requestRemoval(entry)}>删除</button>}
+          </div>
+          {entry.source === "local" && current && <p id={deleteDescriptionId} className="appearance-delete-note">当前使用的外观不能删除</p>}
+        </div>
+      </article>
+    );
+  };
+
+  return (
+    <>
+      <main className="appearance-window-page" aria-busy={loading || busy !== null}>
+        <header className="appearance-header">
+          <div><p className="appearance-eyebrow">七酱桌宠</p><h1>外观中心</h1><p>选择已制作的角色。每套服装在首版中作为独立外观显示。</p><p className="appearance-legal">公开内置角色必须具有明确授权；本机私用导入内容由导入者负责。</p></div>
+          <div className="appearance-toolbar">
+            <button type="button" onClick={() => void refresh()} disabled={loading || interactionBlocked}>刷新</button>
+            <button type="button" className="primary" onClick={() => void importPackage()} disabled={loading || interactionBlocked}>{busy === "import" ? "正在导入…" : "导入角色包"}</button>
+          </div>
+        </header>
+
+        {feedback && <p role={feedback.kind === "error" ? "alert" : "status"} className={`appearance-feedback ${feedback.kind}`}>{feedback.text}</p>}
+        {loading && entries.length === 0 ? <p className="appearance-loading" role="status">正在读取外观…</p> : (
+          <div className="appearance-sections">
+            <section className="appearance-current-section" aria-labelledby="appearance-current-heading">
+              <h2 id="appearance-current-heading">当前角色</h2>
+              {activeEntry ? (
+                <div className="appearance-current-summary">
+                  <strong>{activeEntry.name}</strong>
+                  <span className={`source-badge ${activeEntry.source}`}>{activeEntry.source === "bundled" ? "官方" : "本机私用"}</span>
+                  <span className="appearance-current">当前使用</span>
+                  <span>版本 {activeEntry.version}</span>
                 </div>
-              </article>
-            );
-          })}
-          {!loading && entries.length === 0 && <p className="appearance-empty">尚无可用外观，请导入角色包。</p>}
-        </section>
-      )}
-    </main>
+              ) : <p className="appearance-empty">当前角色信息暂不可用。</p>}
+            </section>
+
+            <section aria-labelledby="appearance-bundled-heading">
+              <h2 id="appearance-bundled-heading">官方内置角色</h2>
+              {bundledEntries.length > 0
+                ? <div className="appearance-grid" aria-label="官方内置角色">{bundledEntries.map(renderEntry)}</div>
+                : <p className="appearance-empty">暂无官方内置角色。</p>}
+            </section>
+
+            <section aria-labelledby="appearance-local-heading">
+              <h2 id="appearance-local-heading">本机私用角色</h2>
+              {localEntries.length > 0
+                ? <div className="appearance-grid" aria-label="本机私用角色">{localEntries.map(renderEntry)}</div>
+                : <div className="appearance-empty"><p>尚无本机私用角色。</p><button type="button" className="primary" onClick={() => void importPackage()} disabled={interactionBlocked}>导入 .qipet</button></div>}
+            </section>
+          </div>
+        )}
+      </main>
+      {pendingRemoval && <ConfirmRemoveDialog entry={pendingRemoval} onCancel={cancelRemoval} onConfirm={() => void remove(pendingRemoval)} />}
+    </>
   );
 }

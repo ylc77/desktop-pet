@@ -8,13 +8,21 @@ export function formatBytes(value: number): string {
 
 export function UpdateProgress({ progress }: { progress: UpdateDownloadProgress }) {
   if (progress.totalBytes === null || progress.percent === null) {
-    return <div className="update-progress" aria-live="polite"><span>正在下载并验证更新包…</span><progress /> 已下载 {formatBytes(progress.downloadedBytes)}（总大小未知）</div>;
+    const description = `已下载 ${formatBytes(progress.downloadedBytes)}，总大小未知`;
+    return (
+      <div className="update-progress">
+        <span>正在下载并验证更新包…</span>
+        <progress aria-label="更新下载进度" aria-valuetext={description} />
+        <span>{description}</span>
+      </div>
+    );
   }
+  const description = `${progress.percent}%：${formatBytes(progress.downloadedBytes)} / ${formatBytes(progress.totalBytes)}`;
   return (
-    <div className="update-progress" aria-live="polite">
+    <div className="update-progress">
       <span>正在下载并验证更新包…</span>
-      <progress max="100" value={progress.percent} />
-      {progress.percent}% · {formatBytes(progress.downloadedBytes)} / {formatBytes(progress.totalBytes)}
+      <progress aria-label="更新下载进度" aria-valuetext={description} max="100" value={progress.percent} />
+      <span>{description}</span>
     </div>
   );
 }

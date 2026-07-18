@@ -327,6 +327,24 @@
           "markdownDescription": "Enables the show_appearance_window command without any pre-configured scope."
         },
         {
+          "description": "Enables the show_pet_context_menu command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-show-pet-context-menu",
+          "markdownDescription": "Enables the show_pet_context_menu command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-show-settings-window",
+          "markdownDescription": "Enables the show_settings_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sync_native_menu_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sync-native-menu-state",
+          "markdownDescription": "Enables the sync_native_menu_state command without any pre-configured scope."
+        },
+        {
           "description": "Enables the write_settings_file command without any pre-configured scope.",
           "type": "string",
           "const": "allow-write-settings-file",
@@ -481,6 +499,24 @@
           "type": "string",
           "const": "deny-show-appearance-window",
           "markdownDescription": "Denies the show_appearance_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show_pet_context_menu command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-show-pet-context-menu",
+          "markdownDescription": "Denies the show_pet_context_menu command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-show-settings-window",
+          "markdownDescription": "Denies the show_settings_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sync_native_menu_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sync-native-menu-state",
+          "markdownDescription": "Denies the sync_native_menu_state command without any pre-configured scope."
         },
         {
           "description": "Denies the write_settings_file command without any pre-configured scope.",

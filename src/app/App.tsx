@@ -4,10 +4,7 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { PetCanvas } from "../components/PetCanvas/PetCanvas";
-import { ContextMenu } from "../components/ContextMenu/ContextMenu";
 import { DeveloperPanel } from "../components/DeveloperPanel/DeveloperPanel";
-import { SettingsPanel } from "../components/SettingsPanel/SettingsPanel";
-import { AboutPanel } from "../components/AboutPanel/AboutPanel";
 import type { PreparedCharacter } from "../core/character/CharacterLoader";
 import {
   isSelectionRequestExpired,
@@ -21,19 +18,72 @@ import {
 } from "../core/character/CharacterCatalog";
 import type { AnimationState, LoadedCharacter } from "../core/character/types";
 import { validateManifest } from "../core/character/CharacterValidator";
-import { DEFAULT_SETTINGS, DEVELOPER_TOOLS_ALLOWED, resetSettingsPreservingCharacter, type AppSettings } from "../core/settings/settingsSchema";
+import { appSettingsSchema, DEFAULT_SETTINGS, DEVELOPER_TOOLS_ALLOWED, resetSettingsPreservingCharacter, type AppSettings } from "../core/settings/settingsSchema";
 import { loadSettings, parseSettings, saveSettings, saveSettingsStrict } from "../core/settings/settingsStore";
-import { closeApp, hideWindow, isTauriRuntime, restoreWindowPosition, saveWindowPosition, setAlwaysOnTop } from "../core/window/windowController";
+import { closeApp, isTauriRuntime, restoreWindowPosition, saveWindowPosition, setAlwaysOnTop } from "../core/window/windowController";
+import { exportDiagnostics, openLogDirectory } from "../core/diagnostics/diagnosticClient";
 import { log } from "../core/diagnostics/logger";
 import { createNativeUpdaterClient } from "../core/updater/nativeUpdaterClient";
 import { reconcilePendingUpdate, shouldRunAutomaticCheck, startupCheckDelayMs } from "../core/updater/updaterPolicy";
 import { UpdaterStore } from "../core/updater/updaterStore";
 import { useAnimationPlayer } from "../hooks/useAnimationPlayer";
 import { usePetMotion } from "../hooks/usePetMotion";
+import {
+  DesktopControlActionError,
+  MainControlCoordinator,
+  type DesktopControlRequest,
+  type DesktopControlSnapshot,
+  type SettingsSectionId,
+} from "../core/desktopControl";
 
 interface FrameLoadDiagnostics { status: string; loaded: number; failed: number; generation: number }
 const SELECTION_PREPARE_TIMEOUT_MS = 110_000;
 let nativeActivationSequence = 0;
+
+const settingsWindowPatchKeys = new Set<keyof AppSettings>([
+  "scale", "opacity", "alwaysOnTop", "autostart", "animationsPaused", "volume",
+  "hideInFullscreen", "interactionsEnabled", "facing", "automaticUpdateChecks",
+]);
+
+type NativeAppAction = "appearance" | "settings" | "toggle-pause" | "hide" | "show" | "toggle-top" | "toggle-autostart" | "check-updates" | "about" | "reset" | "quit";
+
+interface NativeMenuStatePayload {
+  paused: boolean;
+  alwaysOnTop: boolean;
+  autostart: boolean;
+  updateBusy: boolean;
+}
+
+function updaterIsBusy(status: string): boolean {
+  return status === "downloading" || status === "readyToInstall" || status === "installing" || status === "restarting";
+}
+
+function readSettingsPatch(payload: unknown): Partial<AppSettings> {
+  if (!payload || typeof payload !== "object" || !("patch" in payload)) {
+    throw new DesktopControlActionError("invalid-settings", "这项设置无法识别，请关闭设置窗口后重试。");
+  }
+  const candidate = (payload as { patch?: unknown }).patch;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw new DesktopControlActionError("invalid-settings", "这项设置无法识别，请关闭设置窗口后重试。");
+  }
+  for (const key of Object.keys(candidate)) {
+    if (!settingsWindowPatchKeys.has(key as keyof AppSettings)) {
+      throw new DesktopControlActionError("invalid-settings", "这项设置无法识别，请关闭设置窗口后重试。");
+    }
+  }
+  return candidate as Partial<AppSettings>;
+}
+
+async function showSettingsWindow(section: SettingsSectionId): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("show_settings_window", { section });
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set("surface", "settings");
+  url.searchParams.set("section", section);
+  window.location.assign(url);
+}
 
 function createNativeActivationRequestId(generation: number): string {
   nativeActivationSequence += 1;
@@ -75,14 +125,11 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [character, setCharacter] = useState<LoadedCharacter | null>(null);
   const [catalog, setCatalog] = useState<CharacterCatalogEntry[]>([]);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [cacheCount, setCacheCount] = useState(0);
   const [frameLoad, setFrameLoad] = useState({ status: "loading", loaded: 0, failed: 0, generation: 0 });
   const [reloadKey, setReloadKey] = useState(0);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
   const [updateSuspended, setUpdateSuspended] = useState(false);
-  const [updaterConfigured, setUpdaterConfigured] = useState<boolean | null>(null);
+  const [updateMenuBusy, setUpdateMenuBusy] = useState(false);
   const [updaterStore] = useState(() => new UpdaterStore(createNativeUpdaterClient()));
   const [ready, setReady] = useState(false);
   const [windowVisible, setWindowVisible] = useState(true);
@@ -90,6 +137,10 @@ export default function App() {
   const [updateResultNotice, setUpdateResultNotice] = useState<string | null>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const characterRef = useRef(character);
+  characterRef.current = character;
+  const desktopRevision = useRef(0);
+  const desktopCoordinator = useRef<MainControlCoordinator | null>(null);
   const previousCharacterId = useRef<string | null>(null);
   const preparedRelease = useRef<(() => void) | null>(null);
   const selectionController = useRef<AbortController | null>(null);
@@ -336,12 +387,26 @@ export default function App() {
   }, [settings.autostart, ready]);
 
   useEffect(() => {
+    if (!ready || !isTauriRuntime()) return;
+    const state: NativeMenuStatePayload = {
+      paused: settings.animationsPaused,
+      alwaysOnTop: settings.alwaysOnTop,
+      autostart: settings.autostart,
+      updateBusy: updateMenuBusy,
+    };
+    void invoke("sync_native_menu_state", { state }).catch((error) => log("warn", "同步原生菜单状态失败", error));
+  }, [ready, settings.animationsPaused, settings.alwaysOnTop, settings.autostart, updateMenuBusy]);
+
+  useEffect(() => {
     let lastTransition: unknown = null;
     return updaterStore.subscribe(() => {
       const snapshot = updaterStore.getSnapshot();
-      setUpdaterConfigured(snapshot.configuration?.configured ?? null);
       const suspended = snapshot.status === "installing" || snapshot.status === "restarting";
       setUpdateSuspended((current) => current === suspended ? current : suspended);
+      const menuBusy = updaterIsBusy(snapshot.status);
+      setUpdateMenuBusy((current) => current === menuBusy ? current : menuBusy);
+      desktopRevision.current += 1;
+      void desktopCoordinator.current?.publishSnapshot().catch((error) => log("warn", "同步设置窗口更新状态失败", error));
       const transition = snapshot.transitions.at(-1);
       if (!transition || transition === lastTransition) return;
       lastTransition = transition;
@@ -425,25 +490,26 @@ export default function App() {
         if (position) setSettings((current) => ({ ...current, position }));
       }).catch((error) => log("warn", "保存窗口位置失败", error)), 180);
     }));
-    register(listen<string>("tray-action", (event) => {
+    register(listen<NativeAppAction>("app-action", (event) => {
       const action = event.payload;
       if (action === "toggle-pause") setSettings((current) => ({ ...current, animationsPaused: !current.animationsPaused }));
       if (action === "toggle-top") setSettings((current) => ({ ...current, alwaysOnTop: !current.alwaysOnTop }));
       if (action === "toggle-autostart") setSettings((current) => ({ ...current, autostart: !current.autostart }));
-      if (action === "smaller") setSettings((current) => ({ ...current, scale: Math.max(0.1, current.scale - 0.1) }));
-      if (action === "larger") setSettings((current) => ({ ...current, scale: Math.min(4, current.scale + 0.1) }));
-      if (action === "opacity-half") setSettings((current) => ({ ...current, opacity: 0.5 }));
-      if (action === "opacity-full") setSettings((current) => ({ ...current, opacity: 1 }));
-      if (action === "character") void invoke("show_appearance_window").catch((error) => log("warn", "打开外观中心失败", error));
-      if (action === "settings") { setAboutOpen(false); setSettingsOpen(true); setSettings((current) => ({ ...current, developerPanel: false })); }
-      if (action === "about") { setSettingsOpen(false); setAboutOpen(true); setSettings((current) => ({ ...current, developerPanel: false })); }
+      if (action === "appearance") void invoke("show_appearance_window").catch((error) => log("warn", "打开外观中心失败", error));
+      if (action === "settings") void showSettingsWindow("general").catch((error) => log("warn", "打开设置失败", error));
+      if (action === "about") void showSettingsWindow("about").catch((error) => log("warn", "打开关于与支持失败", error));
       if (action === "check-updates") {
-        setSettingsOpen(false);
-        setAboutOpen(true);
-        void updaterStore.check({ manual: true }).catch((error) => log("warn", "托盘检查更新未执行", error));
+        void showSettingsWindow("update").catch((error) => log("warn", "打开更新设置失败", error));
+        void updaterStore.check({ manual: true }).catch((error) => log("warn", "菜单检查更新未执行", error));
       }
-      if (action === "developer" && DEVELOPER_TOOLS_ALLOWED) { setSettingsOpen(false); setAboutOpen(false); setSettings((current) => ({ ...current, developerPanel: !current.developerPanel })); }
-      if (action === "reload") setReloadKey((value) => value + 1);
+      if (action === "reset") {
+        void getCurrentWindow().setPosition(new PhysicalPosition(40, 40))
+          .then(() => setSettings((current) => ({ ...current, position: { x: 40, y: 40 } })))
+          .catch((error) => log("warn", "恢复默认位置失败", error));
+      }
+      if (action === "hide") setWindowVisible(false);
+      if (action === "show") setWindowVisible(true);
+      if (action === "quit") void closeApp().catch((error) => log("warn", "退出应用失败", error));
     }));
     register(listen<CharacterSelectionRequest>("character-selection-requested", (event) => {
       void performSelection(event.payload).catch((error) => log("warn", "处理角色切换请求失败", error));
@@ -457,6 +523,32 @@ export default function App() {
   }, [performSelection, ready, updaterStore]);
 
   const patchSettings = useCallback((patch: Partial<AppSettings>) => setSettings((current) => ({ ...current, ...patch })), []);
+
+  const applyChangedNativeSettings = useCallback(async (next: AppSettings, previous: AppSettings) => {
+    if (next.alwaysOnTop !== previous.alwaysOnTop) await setAlwaysOnTop(next.alwaysOnTop);
+    if (!isTauriRuntime()) return;
+    if (next.hideInFullscreen !== previous.hideInFullscreen) {
+      await invoke("set_fullscreen_auto_hide", { enabled: next.hideInFullscreen });
+    }
+    if (next.autostart !== previous.autostart) {
+      await (next.autostart ? enableAutostart() : disableAutostart());
+    }
+  }, []);
+
+  const commitSettings = useCallback(async (next: AppSettings) => {
+    const previous = settingsRef.current;
+    try {
+      await applyChangedNativeSettings(next, previous);
+      await saveSettingsStrict(next);
+    } catch (error) {
+      try { await applyChangedNativeSettings(previous, next); }
+      catch (rollbackError) { log("warn", "设置应用失败后的系统状态恢复未全部完成", rollbackError); }
+      log("warn", "设置未能完整应用，已保留原设置", error);
+      throw new DesktopControlActionError("settings-apply-failed", "这项设置未能保存，已保留原来的设置。请重试或查看日志。");
+    }
+    settingsRef.current = next;
+    setSettings(next);
+  }, [applyChangedNativeSettings]);
 
   const installUpdate = useCallback(async () => {
     await updaterStore.updateNow({
@@ -484,34 +576,125 @@ export default function App() {
   }, [updaterStore]);
 
   const resetSettings = useCallback(async () => {
-    const reset = resetSettingsPreservingCharacter(settings);
-    await saveSettingsStrict(reset);
-    settingsRef.current = reset;
-    setSettings(reset);
+    const reset = resetSettingsPreservingCharacter(settingsRef.current);
+    await commitSettings(reset);
     if (isTauriRuntime()) await invoke("restore_main_window");
-  }, [settings]);
+  }, [commitSettings]);
+
+  const getDesktopSnapshot = useCallback((): DesktopControlSnapshot => {
+    const currentCharacter = characterRef.current;
+    return {
+      settings: settingsRef.current,
+      updater: updaterStore.getSnapshot(),
+      character: currentCharacter ? {
+        id: currentCharacter.manifest.id,
+        name: currentCharacter.manifest.name,
+        version: currentCharacter.manifest.version,
+        author: currentCharacter.manifest.author,
+      } : null,
+      revision: desktopRevision.current,
+    };
+  }, [updaterStore]);
+
+  const handleDesktopControlRequest = useCallback(async (request: DesktopControlRequest) => {
+    if (request.action === "patch-settings") {
+      const patch = readSettingsPatch(request.payload);
+      const next = appSettingsSchema.parse({ ...settingsRef.current, ...patch });
+      await commitSettings(next);
+      return;
+    }
+    if (request.action === "reset-settings") {
+      await resetSettings();
+      return;
+    }
+    if (request.action === "check-updates") {
+      await updaterStore.check({ manual: true });
+      return;
+    }
+    if (request.action === "open-appearance") {
+      if (!isTauriRuntime()) throw new DesktopControlActionError("desktop-only", "外观中心需要在七酱桌宠中打开。");
+      await invoke("show_appearance_window");
+      return;
+    }
+    if (request.action === "open-log-directory") {
+      await openLogDirectory();
+      return;
+    }
+    if (request.action === "export-diagnostics") {
+      const currentCharacter = characterRef.current;
+      if (!currentCharacter) throw new DesktopControlActionError("character-unavailable", "角色仍在加载，请稍后再导出诊断信息。");
+      await exportDiagnostics(settingsRef.current, currentCharacter, updaterStore.getSnapshot());
+      return;
+    }
+    if (request.action === "update-now") {
+      await installUpdate();
+      return;
+    }
+    if (request.action === "update-later") {
+      await updaterStore.later();
+      return;
+    }
+    if (request.action === "update-skip") {
+      const version = updaterStore.getSnapshot().update?.version ?? null;
+      if (!version) throw new DesktopControlActionError("update-unavailable", "当前没有可跳过的更新版本。");
+      if (await updaterStore.skip()) {
+        await commitSettings(appSettingsSchema.parse({ ...settingsRef.current, updateSkippedVersion: version }));
+      }
+      return;
+    }
+    if (request.action === "update-retry") {
+      await updaterStore.retry();
+    }
+  }, [commitSettings, installUpdate, resetSettings, updaterStore]);
+
+  useEffect(() => {
+    if (!ready || !isTauriRuntime()) return;
+    const coordinator = new MainControlCoordinator({
+      getSnapshot: getDesktopSnapshot,
+      handleRequest: handleDesktopControlRequest,
+    });
+    desktopCoordinator.current = coordinator;
+    let disposed = false;
+    void coordinator.start().then(() => {
+      if (disposed) coordinator.stop();
+      else void coordinator.publishSnapshot().catch((error) => log("warn", "发送设置窗口初始状态失败", error));
+    }).catch((error) => log("warn", "启动设置窗口状态桥失败", error));
+    return () => {
+      disposed = true;
+      if (desktopCoordinator.current === coordinator) desktopCoordinator.current = null;
+      coordinator.stop();
+    };
+  }, [getDesktopSnapshot, handleDesktopControlRequest, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    desktopRevision.current += 1;
+    void desktopCoordinator.current?.publishSnapshot().catch((error) => log("warn", "同步设置窗口应用状态失败", error));
+  }, [character, ready, settings]);
+
+  const showPetContextMenu = useCallback(async (position: { x: number; y: number }) => {
+    if (!isTauriRuntime()) return;
+    const currentSettings = settingsRef.current;
+    const state: NativeMenuStatePayload = {
+      paused: currentSettings.animationsPaused,
+      alwaysOnTop: currentSettings.alwaysOnTop,
+      autostart: currentSettings.autostart,
+      updateBusy: updaterIsBusy(updaterStore.getSnapshot().status),
+    };
+    await invoke("show_pet_context_menu", { x: position.x, y: position.y, state });
+  }, [updaterStore]);
 
   if (!ready || !character) return <div className="loading">正在加载占位角色…</div>;
   return <RunningApp
     character={character}
     settings={settings}
-    menu={menu}
     cacheCount={cacheCount}
     frameLoad={frameLoad}
     windowVisible={windowVisible}
-    onWindowVisible={setWindowVisible}
     onPatch={patchSettings}
-    onMenu={setMenu}
+    onContextMenu={(position) => void showPetContextMenu(position).catch((error) => log("warn", "打开原生桌宠菜单失败", error))}
     onReload={() => setReloadKey((value) => value + 1)}
-    settingsOpen={settingsOpen}
-    onSettingsOpen={setSettingsOpen}
-    aboutOpen={aboutOpen}
-    onAboutOpen={setAboutOpen}
-    updaterStore={updaterStore}
     updateSuspended={updateSuspended}
-    updaterConfigured={updaterConfigured}
-    onInstallUpdate={installUpdate}
-    onResetSettings={resetSettings}
     appearanceFeedback={appearanceFeedback}
     updateResultNotice={updateResultNotice}
   />;
@@ -520,28 +703,18 @@ export default function App() {
 interface RunningProps {
   character: LoadedCharacter;
   settings: AppSettings;
-  menu: { x: number; y: number } | null;
   cacheCount: number;
   frameLoad: FrameLoadDiagnostics;
   windowVisible: boolean;
-  onWindowVisible: (visible: boolean) => void;
   onPatch: (patch: Partial<AppSettings>) => void;
-  onMenu: (menu: { x: number; y: number } | null) => void;
+  onContextMenu: (position: { x: number; y: number }) => void;
   onReload: () => void;
-  settingsOpen: boolean;
-  onSettingsOpen: (open: boolean) => void;
-  aboutOpen: boolean;
-  onAboutOpen: (open: boolean) => void;
-  updaterStore: UpdaterStore;
   updateSuspended: boolean;
-  updaterConfigured: boolean | null;
-  onInstallUpdate: () => Promise<void>;
-  onResetSettings: () => Promise<void>;
   appearanceFeedback: string | null;
   updateResultNotice: string | null;
 }
 
-function RunningApp({ character, settings, menu, cacheCount, frameLoad, windowVisible, onWindowVisible, onPatch, onMenu, onReload, settingsOpen, onSettingsOpen, aboutOpen, onAboutOpen, updaterStore, updateSuspended, updaterConfigured, onInstallUpdate, onResetSettings, appearanceFeedback, updateResultNotice }: RunningProps) {
+function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible, onPatch, onContextMenu, onReload, updateSuspended, appearanceFeedback, updateResultNotice }: RunningProps) {
   const [showDebugBounds, setShowDebugBounds] = useState(false);
   const [simulateMissingFrame, setSimulateMissingFrame] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -578,54 +751,22 @@ function RunningApp({ character, settings, menu, cacheCount, frameLoad, windowVi
     return () => { active = false; window.clearInterval(timer); };
   }, [settings.developerPanel]);
 
-  const action = async (name: "reload" | "reset" | "hide" | "quit" | "settings" | "developer" | "appearance" | "check-updates" | "about") => {
-    onMenu(null);
-    if (name === "reload") onReload();
-    if (name === "settings") { onPatch({ developerPanel: false }); onAboutOpen(false); onSettingsOpen(true); }
-    if (name === "about") { onPatch({ developerPanel: false }); onSettingsOpen(false); onAboutOpen(true); }
-    if (name === "check-updates") { onPatch({ developerPanel: false }); onSettingsOpen(false); onAboutOpen(true); await updaterStore.check({ manual: true }); }
-    if (name === "appearance" && isTauriRuntime()) await invoke("show_appearance_window");
-    if (name === "developer" && DEVELOPER_TOOLS_ALLOWED) { onSettingsOpen(false); onAboutOpen(false); onPatch({ developerPanel: true }); }
-    if (name === "hide") {
-      onWindowVisible(false);
-      try {
-        await hideWindow();
-      } catch (error) {
-        onWindowVisible(true);
-        log("warn", "隐藏窗口失败，已恢复动画运行状态", error);
-      }
-    }
-    if (name === "quit") await closeApp();
-    if (name === "reset" && isTauriRuntime()) {
-      await getCurrentWindow().setPosition(new PhysicalPosition(40, 40));
-      onPatch({ position: { x: 40, y: 40 } });
-    }
-  };
+  useEffect(() => {
+    if (!DEVELOPER_TOOLS_ALLOWED) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.shiftKey || event.key.toLowerCase() !== "d") return;
+      event.preventDefault();
+      onPatch({ developerPanel: !settings.developerPanel });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onPatch, settings.developerPanel]);
 
   return (
     <>
-      <PetCanvas frame={frame} animation={animation} settings={settings} frameSize={character.manifest.frameSize} anchor={character.manifest.anchor} hitbox={character.manifest.hitbox} visual={character.manifest.visual} characterName={character.manifest.name} interactions={character.manifest.interactions} showDebugBounds={showDebugBounds} simulateMissingFrame={simulateMissingFrame} onState={transition} onInputDiagnostic={(event, latencyMs) => setInputDiagnostic({ event, latencyMs })} onContextMenu={onMenu} onFrameError={() => { setSimulateMissingFrame(false); log("warn", "检测到无法显示的动画帧，保留上一有效帧并回退到 idle"); transition("idle", "frame-error", true); }} />
-      {menu && <ContextMenu position={menu} settings={settings} developerToolsAllowed={DEVELOPER_TOOLS_ALLOWED} onPatch={onPatch} onAction={(name) => void action(name).catch((error) => log("warn", "菜单操作失败", error))} onClose={() => onMenu(null)} />}
+      <PetCanvas frame={frame} animation={animation} settings={settings} frameSize={character.manifest.frameSize} anchor={character.manifest.anchor} hitbox={character.manifest.hitbox} visual={character.manifest.visual} characterName={character.manifest.name} interactions={character.manifest.interactions} showDebugBounds={showDebugBounds} simulateMissingFrame={simulateMissingFrame} onState={transition} onInputDiagnostic={(event, latencyMs) => setInputDiagnostic({ event, latencyMs })} onContextMenu={onContextMenu} onFrameError={() => { setSimulateMissingFrame(false); log("warn", "检测到无法显示的动画帧，保留上一有效帧并回退到 idle"); transition("idle", "frame-error", true); }} />
       {appearanceFeedback && <div className="pet-notice" role="status">{appearanceFeedback}</div>}
       {!appearanceFeedback && updateResultNotice && <div className="pet-notice" role="status">{updateResultNotice}</div>}
-      {settingsOpen && <SettingsPanel
-        settings={settings}
-        updaterConfigured={updaterConfigured}
-        onPatch={onPatch}
-        onCheckUpdates={() => void action("check-updates").catch((error) => log("warn", "检查更新失败", error))}
-        onAbout={() => void action("about")}
-        onReset={() => void onResetSettings().catch((error) => log("warn", "恢复默认设置失败", error))}
-        onClose={() => onSettingsOpen(false)}
-      />}
-      {aboutOpen && <AboutPanel
-        settings={settings}
-        character={character}
-        updaterStore={updaterStore}
-        onPatch={onPatch}
-        onInstall={onInstallUpdate}
-        onReset={onResetSettings}
-        onClose={() => onAboutOpen(false)}
-      />}
       {DEVELOPER_TOOLS_ALLOWED && settings.developerPanel && <DeveloperPanel
         character={character} snapshot={snapshot} animation={animation} frameIndex={frameIndex} cacheCount={cacheCount}
         frameLoad={frameLoad} diagnostics={diagnostics} motion={motion} display={displayDiagnostic} input={inputDiagnostic}

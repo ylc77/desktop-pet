@@ -1756,8 +1756,8 @@ pub fn show_appearance_window_for<R: Runtime>(app: &AppHandle<R>) -> Result<(), 
     }
     WebviewWindowBuilder::new(app, "appearance", WebviewUrl::App("index.html".into()))
         .title("七酱桌宠 · 外观中心")
-        .inner_size(920.0, 680.0)
-        .min_inner_size(720.0, 520.0)
+        .inner_size(960.0, 720.0)
+        .min_inner_size(560.0, 360.0)
         .resizable(true)
         .decorations(true)
         .transparent(false)

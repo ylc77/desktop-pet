@@ -55,6 +55,9 @@ try {
 
     $dispatcher = [System.IO.File]::ReadAllText(([System.IO.Path]::Combine($script:RepositoryRoot, 'scripts', 'windows', 'run-qa-suite.ps1')), [System.Text.Encoding]::UTF8)
     Add-Test 'Safe QA runs the release startup smoke for ten seconds' ($dispatcher -match "Release startup smoke test" -and $dispatcher -match 'MinimumUptimeSeconds 10') 'Inspected Safe QA dispatcher.'
+
+    $smokeSource = [System.IO.File]::ReadAllText($smokeScript, [System.Text.Encoding]::UTF8)
+    Add-Test 'A top-level window is accepted even when a borderless pet window has no native title' ($smokeSource -match 'MainWindowHandle -ne \[IntPtr\]::Zero' -and $smokeSource -notmatch 'MainWindowHandle -ne \[IntPtr\]::Zero -and') 'Window presence and title diagnostics are evaluated separately.'
 } finally {
     if ([System.IO.Directory]::Exists($root)) { [System.IO.Directory]::Delete($root, $true) }
 }

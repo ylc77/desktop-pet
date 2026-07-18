@@ -39,10 +39,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function makeApi(imported = true, selectedId = "official") {
+function makeApi(imported = true, selectedId = "official", catalog: CharacterCatalogEntry[] = [bundled, local, broken]) {
   let changed: ((change: CharacterSelectionChanged) => void) | undefined;
   const api: AppearanceCenterApi = {
-    list: vi.fn(async () => [bundled, local, broken]),
+    list: vi.fn(async () => catalog),
     importPackage: vi.fn(async () => imported ? local : null),
     remove: vi.fn(async () => undefined),
     requestSelection: vi.fn(async () => undefined),
@@ -61,9 +61,12 @@ describe("AppearanceCenter", () => {
     render(<AppearanceCenter api={api} />);
 
     expect(await screen.findByRole("heading", { name: "官方占位" })).toBeInTheDocument();
-    expect(screen.getByText("官方")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "当前角色" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "官方内置角色" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "本机私用角色" })).toBeInTheDocument();
+    expect(screen.getAllByText("官方")).toHaveLength(2);
     expect(screen.getAllByText("本机私用")).toHaveLength(2);
-    expect(screen.getByText("当前使用")).toBeInTheDocument();
+    expect(screen.getAllByText("当前使用")).toHaveLength(2);
     expect(screen.getByText("资源损坏")).toBeInTheDocument();
     expect(screen.getByText("idle 动画没有可用帧")).toBeInTheDocument();
     expect(screen.getByAltText("官方占位 预览")).toHaveAttribute("loading", "lazy");
@@ -84,6 +87,7 @@ describe("AppearanceCenter", () => {
     change({ id: "personal", source: "local", requestId: request.requestId, ok: true });
     await waitFor(() => expect(localCard).toHaveClass("current"));
     expect(localCard.querySelector<HTMLButtonElement>("button.danger")).toBeDisabled();
+    expect(screen.getByText("当前使用的外观不能删除")).toBeInTheDocument();
     expect(screen.getByText("外观已更换")).toBeInTheDocument();
   });
 
@@ -105,17 +109,70 @@ describe("AppearanceCenter", () => {
     expect(screen.getByText(/角色包已更新，正在验证并重新加载/)).toBeInTheDocument();
   });
 
-  it("deletes a non-active local package only after explicit confirmation", async () => {
+  it("deletes a non-active local package only after accessible confirmation", async () => {
     const { api } = makeApi();
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirm = vi.spyOn(window, "confirm");
     render(<AppearanceCenter api={api} />);
     const localCard = (await screen.findByRole("heading", { name: "我的角色" })).closest("article")!;
 
     fireEvent.click(localCard.querySelector<HTMLButtonElement>("button.danger")!);
+    const dialog = screen.getByRole("dialog", { name: "删除角色" });
+    expect(dialog).toHaveTextContent("确定从本机删除“我的角色”吗");
+    expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "删除角色" }));
 
     await waitFor(() => expect(api.remove).toHaveBeenCalledWith("personal"));
-    expect(confirm).toHaveBeenCalledWith("确定从本机删除“我的角色”吗？");
+    expect(confirm).not.toHaveBeenCalled();
     expect(await screen.findByText("本地角色已删除")).toBeInTheDocument();
+  });
+
+  it("returns focus to delete when the confirmation is cancelled with Escape", async () => {
+    const { api } = makeApi();
+    render(<AppearanceCenter api={api} />);
+    const localCard = (await screen.findByRole("heading", { name: "我的角色" })).closest("article")!;
+    const deleteButton = localCard.querySelector<HTMLButtonElement>("button.danger")!;
+    deleteButton.focus();
+    fireEvent.click(deleteButton);
+
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "删除角色" }), { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "删除角色" })).not.toBeInTheDocument());
+    await waitFor(() => expect(deleteButton).toHaveFocus());
+    expect(api.remove).not.toHaveBeenCalled();
+  });
+
+  it("exposes loading and operation state through aria-busy", async () => {
+    let finishList!: (entries: CharacterCatalogEntry[]) => void;
+    const { api } = makeApi();
+    vi.mocked(api.list).mockImplementation(() => new Promise((resolve) => { finishList = resolve; }));
+    render(<AppearanceCenter api={api} />);
+    const main = screen.getByRole("main");
+    expect(main).toHaveAttribute("aria-busy", "true");
+
+    finishList([bundled, local, broken]);
+    await screen.findByRole("heading", { name: "官方占位" });
+    expect(main).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("uses alert for errors and status for ordinary feedback", async () => {
+    const { api, change } = makeApi();
+    render(<AppearanceCenter api={api} />);
+    const localCard = (await screen.findByRole("heading", { name: "我的角色" })).closest("article")!;
+    fireEvent.click(localCard.querySelector<HTMLButtonElement>("button.primary")!);
+    const request = vi.mocked(api.requestSelection).mock.calls[0][0];
+    change({ id: "personal", source: "local", requestId: request.requestId, ok: false, error: "切换已取消" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("切换已取消");
+
+    fireEvent.click(screen.getByRole("button", { name: "导入角色包" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/角色包导入完成/);
+  });
+
+  it("offers a qipet import action in the empty local state", async () => {
+    const { api } = makeApi(true, "_placeholder", []);
+    render(<AppearanceCenter api={api} />);
+    expect(await screen.findByText("尚无本机私用角色。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "导入 .qipet" }));
+    expect(api.importPackage).toHaveBeenCalledTimes(1);
   });
 
   it("clears its busy state when the main window reports a cancelled request", async () => {
