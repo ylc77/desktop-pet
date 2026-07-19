@@ -37,6 +37,7 @@ function initialPreviewSnapshot(): DesktopControlSnapshot {
       id: "_placeholder",
       name: "中性占位角色",
       version: "1.0.0",
+      fitScale: 1,
       author: "七酱桌宠",
     },
     revision: 1,

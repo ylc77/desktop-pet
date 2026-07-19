@@ -34,7 +34,7 @@ function snapshot(overrides: Partial<DesktopControlSnapshot> = {}): DesktopContr
       error: null,
       transitions: [],
     },
-    character: { id: "_placeholder", name: "中性占位角色", version: "1.0.0", author: "七酱桌宠" },
+    character: { id: "_placeholder", name: "中性占位角色", version: "1.0.0", author: "七酱桌宠", fitScale: 1 },
     revision: 1,
     ...overrides,
   };
@@ -151,21 +151,49 @@ describe("SettingsWindow", () => {
     act(() => client.emitSnapshot());
     const slider = await screen.findByRole("slider", { name: "大小 100%" });
 
-    fireEvent.change(slider, { target: { value: "1.1" } });
+    expect(slider).toHaveAttribute("max", "100");
+    fireEvent.change(slider, { target: { value: "80" } });
     await waitFor(() => expect(client.requests).toHaveLength(1));
-    fireEvent.change(slider, { target: { value: "1.2" } });
-    fireEvent.change(slider, { target: { value: "1.35" } });
+    fireEvent.change(slider, { target: { value: "70" } });
+    fireEvent.change(slider, { target: { value: "65" } });
 
-    expect(slider).toHaveValue("1.35");
+    expect(slider).toHaveValue("65");
     expect(client.requests).toHaveLength(1);
-    act(() => client.settleNext({ ok: true, patch: { scale: 1.1 } }));
+    act(() => client.settleNext({ ok: true, patch: { scale: 0.8 } }));
 
     await waitFor(() => expect(client.requests).toHaveLength(2));
-    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 1.35 } } });
-    act(() => client.settleNext({ ok: true, patch: { scale: 1.35 } }));
+    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 0.65 } } });
+    act(() => client.settleNext({ ok: true, patch: { scale: 0.65 } }));
 
-    await waitFor(() => expect(screen.getByText("大小 135%")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("大小 65%")).toBeInTheDocument());
     expect(screen.getByText("更改会即时保存并立即生效。")).toBeInTheDocument();
+  });
+
+  it("treats Xiaoyou's fitted canvas scale as 100%", async () => {
+    window.history.replaceState({}, "", "/?section=appearance");
+    const fitScale = 420 / 1024;
+    const client = new FakeSettingsClient();
+    client.current = snapshot({
+      settings: { ...DEFAULT_SETTINGS, scale: fitScale },
+      character: {
+        id: "qijiang-xiaoyou",
+        name: "小幽",
+        version: "0.1.0",
+        author: "七酱",
+        fitScale,
+      },
+    });
+    render(<SettingsWindow client={client} onClose={vi.fn()} />);
+    act(() => client.emitSnapshot());
+    const slider = await screen.findByRole("slider", { name: "大小 100%" });
+
+    expect(slider).toHaveAttribute("max", "100");
+    fireEvent.change(slider, { target: { value: "50" } });
+
+    await waitFor(() => expect(client.requests[0]).toEqual({
+      action: "patch-settings",
+      payload: { patch: { scale: fitScale / 2 } },
+    }));
   });
 
   it("blocks reset and updater actions while a settings patch is in flight", async () => {
@@ -211,19 +239,19 @@ describe("SettingsWindow", () => {
     act(() => client.emitSnapshot());
     const slider = await screen.findByRole("slider", { name: "大小 100%" });
 
-    fireEvent.change(slider, { target: { value: "1.1" } });
+    fireEvent.change(slider, { target: { value: "80" } });
     await waitFor(() => expect(client.requests).toHaveLength(1));
-    fireEvent.change(slider, { target: { value: "1.4" } });
+    fireEvent.change(slider, { target: { value: "60" } });
     const close = screen.getByRole("button", { name: "关闭七酱桌宠设置" });
     expect(close).toBeDisabled();
     fireEvent.click(close);
     expect(onClose).not.toHaveBeenCalled();
 
-    act(() => client.settleNext({ ok: true, patch: { scale: 1.1 } }));
+    act(() => client.settleNext({ ok: true, patch: { scale: 0.8 } }));
     await waitFor(() => expect(client.requests).toHaveLength(2));
-    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 1.4 } } });
+    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 0.6 } } });
     expect(onClose).not.toHaveBeenCalled();
-    act(() => client.settleNext({ ok: true, patch: { scale: 1.4 } }));
+    act(() => client.settleNext({ ok: true, patch: { scale: 0.6 } }));
 
     await waitFor(() => expect(close).toBeEnabled());
     fireEvent.click(close);
@@ -237,16 +265,16 @@ describe("SettingsWindow", () => {
     act(() => client.emitSnapshot());
     const slider = await screen.findByRole("slider", { name: "大小 100%" });
 
-    fireEvent.change(slider, { target: { value: "1.1" } });
+    fireEvent.change(slider, { target: { value: "80" } });
     await waitFor(() => expect(client.requests).toHaveLength(1));
-    fireEvent.change(slider, { target: { value: "1.45" } });
+    fireEvent.change(slider, { target: { value: "55" } });
     view.unmount();
     expect(client.order).not.toContain("stop");
 
-    act(() => client.settleNext({ ok: true, patch: { scale: 1.1 } }));
+    act(() => client.settleNext({ ok: true, patch: { scale: 0.8 } }));
     await waitFor(() => expect(client.requests).toHaveLength(2));
-    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 1.45 } } });
-    act(() => client.settleNext({ ok: true, patch: { scale: 1.45 } }));
+    expect(client.requests[1]).toEqual({ action: "patch-settings", payload: { patch: { scale: 0.55 } } });
+    act(() => client.settleNext({ ok: true, patch: { scale: 0.55 } }));
     await waitFor(() => expect(client.order).toContain("stop"));
   });
 
@@ -257,7 +285,7 @@ describe("SettingsWindow", () => {
     act(() => client.emitSnapshot());
     const slider = await screen.findByRole("slider", { name: "大小 100%" });
 
-    fireEvent.change(slider, { target: { value: "1.5" } });
+    fireEvent.change(slider, { target: { value: "50" } });
     await waitFor(() => expect(client.requests).toHaveLength(1));
     act(() => client.settleNext({ ok: false, message: "无法保存大小设置" }));
 

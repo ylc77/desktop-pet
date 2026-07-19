@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { MAX_PERSISTED_PET_SCALE, MIN_PERSISTED_PET_SCALE } from "../animation/petScale";
 
 export const appSettingsSchema = z.object({
   position: z.object({ x: z.number(), y: z.number() }).nullable(),
   monitorName: z.string().nullable(),
-  scale: z.number().min(0.1).max(4),
+  scale: z.number().min(MIN_PERSISTED_PET_SCALE).max(MAX_PERSISTED_PET_SCALE),
   opacity: z.number().min(0.2).max(1),
   characterId: z.string().min(1),
   skinId: z.string().min(1),
@@ -28,6 +29,7 @@ export const appSettingsSchema = z.object({
   lastConfirmedUpdateVersion: z.string().nullable(),
   updateLastFailedVersion: z.string().nullable(),
 });
+export const appSettingsPatchSchema = appSettingsSchema.partial();
 
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 export const DEVELOPER_TOOLS_ALLOWED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEVELOPER_TOOLS === "true";

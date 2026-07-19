@@ -4,6 +4,7 @@ import type { AnimationState, CharacterManifest, LoadedAnimation } from "../../c
 import { startDragging } from "../../core/window/windowController";
 import { log } from "../../core/diagnostics/logger";
 import { anchorLayout, mirroredHitbox } from "../../core/animation/renderGeometry";
+import { clampPetScaleToFit, getPetFitScale, type PetViewportSize } from "../../core/animation/petScale";
 import { ClickArbiter, DOUBLE_CLICK_WINDOW_MS, exceedsDragThreshold } from "../../core/animation/interactionArbiter";
 
 interface Props {
@@ -12,6 +13,7 @@ interface Props {
   settings: AppSettings;
   frameSize: { width: number; height: number };
   anchor: { x: number; y: number };
+  viewport: PetViewportSize;
   hitbox?: CharacterManifest["hitbox"];
   visual?: CharacterManifest["visual"];
   characterName: string;
@@ -76,7 +78,7 @@ export function BufferedFrame({ source, dropShadow, onError }: { source: string;
   </div>;
 }
 
-export function PetCanvas({ frame, animation, settings, frameSize, anchor, hitbox, visual, characterName, interactions, showDebugBounds, simulateMissingFrame, onState, onInputDiagnostic, onContextMenu, onFrameError }: Props) {
+export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewport, hitbox, visual, characterName, interactions, showDebugBounds, simulateMissingFrame, onState, onInputDiagnostic, onContextMenu, onFrameError }: Props) {
   const gesture = useRef<{ x: number; y: number; pointerId: number; dragging: boolean } | null>(null);
   const lastTapInteraction = useRef(Number.NEGATIVE_INFINITY);
   const lastHoverInteraction = useRef(Number.NEGATIVE_INFINITY);
@@ -86,6 +88,8 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, hitbo
   const hoverArmed = useRef(false);
   const mirrored = animation.movement?.direction === undefined && settings.facing === "left" && animation.flipXAllowed !== false;
   const activeAnchor = { x: mirrored ? 1 - anchor.x : anchor.x, y: anchor.y };
+  const fitScale = getPetFitScale(frameSize, activeAnchor, viewport);
+  const effectiveScale = clampPetScaleToFit(settings.scale * (animation.scale ?? 1), fitScale);
   const activeHitbox = mirroredHitbox(hitbox ?? { x: 0, y: 0, width: 1, height: 1 }, mirrored);
   const cooldown = interactions?.cooldownMs ?? 350;
   const desiredFrame = simulateMissingFrame ? "/characters/__missing__/missing_0001.png" : frame;
@@ -128,7 +132,7 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, hitbo
           style={{
             width: frameSize.width,
             height: frameSize.height,
-            transform: `scale(${settings.scale * (animation.scale ?? 1)}) translate(${animation.offsetX ?? 0}px, ${animation.offsetY ?? 0}px)`,
+            transform: `scale(${effectiveScale}) translate(${animation.offsetX ?? 0}px, ${animation.offsetY ?? 0}px)`,
             transformOrigin: `${activeAnchor.x * 100}% ${activeAnchor.y * 100}%`,
             opacity: settings.opacity,
           }}

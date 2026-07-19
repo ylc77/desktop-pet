@@ -37,6 +37,8 @@ export interface DesktopCharacterSummary {
   name: string;
   version: string;
   author: string;
+  /** Absolute canvas multiplier that represents 100% in the current main window. */
+  fitScale: number;
 }
 
 /**

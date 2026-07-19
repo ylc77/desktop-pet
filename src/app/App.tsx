@@ -19,7 +19,7 @@ import {
 import type { AnimationState, LoadedCharacter } from "../core/character/types";
 import { validateManifest } from "../core/character/CharacterValidator";
 import { persistSelectionBeforeActivation } from "../core/character/selectionPersistence";
-import { appSettingsSchema, DEFAULT_SETTINGS, DEVELOPER_TOOLS_ALLOWED, resetSettingsPreservingCharacter, type AppSettings } from "../core/settings/settingsSchema";
+import { appSettingsPatchSchema, appSettingsSchema, DEFAULT_SETTINGS, DEVELOPER_TOOLS_ALLOWED, resetSettingsPreservingCharacter, type AppSettings } from "../core/settings/settingsSchema";
 import { loadSettings, parseSettings, saveSettings, saveSettingsStrict } from "../core/settings/settingsStore";
 import { SettingsTransactionQueue } from "../core/settings/settingsTransactionQueue";
 import { closeApp, isTauriRuntime, restoreWindowPosition, saveWindowPosition, setAlwaysOnTop } from "../core/window/windowController";
@@ -31,6 +31,7 @@ import { UpdaterStore } from "../core/updater/updaterStore";
 import { useAnimationPlayer } from "../hooks/useAnimationPlayer";
 import { usePetMotion } from "../hooks/usePetMotion";
 import { isRuntimeMotionPaused, usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
+import { clampPetScaleToFit, getPetFitScale, rescalePetForFitChange, type PetViewportSize } from "../core/animation/petScale";
 import {
   DesktopControlActionError,
   MainControlCoordinator,
@@ -41,6 +42,7 @@ import {
 
 interface FrameLoadDiagnostics { status: string; loaded: number; failed: number; generation: number }
 const SELECTION_PREPARE_TIMEOUT_MS = 110_000;
+const DEFAULT_PET_VIEWPORT_SIZE: PetViewportSize = { width: 420, height: 420 };
 let nativeActivationSequence = 0;
 
 const settingsWindowPatchKeys = new Set<keyof AppSettings>([
@@ -62,6 +64,24 @@ function updaterIsBusy(status: string): boolean {
   return status === "downloading" || status === "readyToInstall" || status === "installing" || status === "restarting";
 }
 
+function readPetViewportSize(): PetViewportSize {
+  const width = Number.isFinite(window.innerWidth) && window.innerWidth > 0
+    ? window.innerWidth
+    : DEFAULT_PET_VIEWPORT_SIZE.width;
+  const height = Number.isFinite(window.innerHeight) && window.innerHeight > 0
+    ? window.innerHeight
+    : DEFAULT_PET_VIEWPORT_SIZE.height;
+  return { width, height };
+}
+
+function fitScaleForCharacter(character: LoadedCharacter, viewport: PetViewportSize): number {
+  return getPetFitScale(character.manifest.frameSize, character.manifest.anchor, viewport);
+}
+
+function clampScaleForCharacter(scale: number, character: LoadedCharacter | null, viewport: PetViewportSize): number {
+  return character ? clampPetScaleToFit(scale, fitScaleForCharacter(character, viewport)) : scale;
+}
+
 function readSettingsPatch(payload: unknown): Partial<AppSettings> {
   if (!payload || typeof payload !== "object" || !("patch" in payload)) {
     throw new DesktopControlActionError("invalid-settings", "这项设置无法识别，请关闭设置窗口后重试。");
@@ -75,7 +95,11 @@ function readSettingsPatch(payload: unknown): Partial<AppSettings> {
       throw new DesktopControlActionError("invalid-settings", "这项设置无法识别，请关闭设置窗口后重试。");
     }
   }
-  return candidate as Partial<AppSettings>;
+  const parsed = appSettingsPatchSchema.safeParse(candidate);
+  if (!parsed.success) {
+    throw new DesktopControlActionError("invalid-settings", "这项设置无法识别，请关闭设置窗口后重试。");
+  }
+  return parsed.data;
 }
 
 async function showSettingsWindow(section: SettingsSectionId): Promise<void> {
@@ -139,10 +163,13 @@ export default function App() {
   const [windowVisible, setWindowVisible] = useState(true);
   const [appearanceFeedback, setAppearanceFeedback] = useState<string | null>(null);
   const [updateResultNotice, setUpdateResultNotice] = useState<string | null>(null);
+  const [petViewport, setPetViewport] = useState<PetViewportSize>(() => readPetViewportSize());
   const settingsRef = useRef(settings);
   const settingsTransactions = useRef(new SettingsTransactionQueue());
   const characterRef = useRef(character);
   characterRef.current = character;
+  const petViewportRef = useRef(petViewport);
+  petViewportRef.current = petViewport;
   const desktopRevision = useRef(0);
   const desktopCoordinator = useRef<MainControlCoordinator | null>(null);
   const previousCharacterId = useRef<string | null>(null);
@@ -172,6 +199,34 @@ export default function App() {
       log("warn", "设置已在当前会话生效，但持久化失败", error);
     });
   }, [replaceSettings, runSettingsTransaction]);
+
+  useEffect(() => {
+    let resizeTimer: number | null = null;
+    const updateViewport = () => {
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        resizeTimer = null;
+        const previous = petViewportRef.current;
+        const next = readPetViewportSize();
+        if (previous.width === next.width && previous.height === next.height) return;
+        const currentCharacter = characterRef.current;
+        petViewportRef.current = next;
+        setPetViewport(next);
+        if (!currentCharacter) return;
+        const previousFitScale = fitScaleForCharacter(currentCharacter, previous);
+        const nextFitScale = fitScaleForCharacter(currentCharacter, next);
+        void queueSettingsStateUpdate((current) => ({
+          ...current,
+          scale: rescalePetForFitChange(current.scale, previousFitScale, nextFitScale),
+        }));
+      }, 120);
+    };
+    window.addEventListener("resize", updateViewport);
+    return () => {
+      window.removeEventListener("resize", updateViewport);
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+    };
+  }, [queueSettingsStateUpdate]);
 
   const applyChangedNativeSettings = useCallback(async (next: AppSettings, previous: AppSettings) => {
     if (next.alwaysOnTop !== previous.alwaysOnTop) await setAlwaysOnTop(next.alwaysOnTop);
@@ -250,7 +305,11 @@ export default function App() {
       ...current,
       characterId: persistSelection ? loaded.manifest.id : current.characterId,
       skinId: persistSelection ? "default" : current.skinId,
-      scale: characterChanged || firstLaunch ? loaded.manifest.defaultScale : current.scale,
+      scale: clampScaleForCharacter(
+        characterChanged || firstLaunch ? loaded.manifest.defaultScale : current.scale,
+        loaded,
+        petViewportRef.current,
+      ),
     };
   }, []);
 
@@ -673,7 +732,10 @@ export default function App() {
   }, [commitSettings, flushSettingsAndClose, performSelection, queueSettingsStateUpdate, ready, updaterStore]);
 
   const patchSettings = useCallback((patch: Partial<AppSettings>) => {
-    queueSettingsStateUpdate((current) => ({ ...current, ...patch }));
+    const boundedPatch = patch.scale === undefined
+      ? patch
+      : { ...patch, scale: clampScaleForCharacter(patch.scale, characterRef.current, petViewportRef.current) };
+    queueSettingsStateUpdate((current) => ({ ...current, ...boundedPatch }));
   }, [queueSettingsStateUpdate]);
 
   const toggleSetting = useCallback((key: ToggleableSetting) => {
@@ -720,7 +782,13 @@ export default function App() {
   }, [replaceSettings, runSettingsTransaction, updaterStore]);
 
   const resetSettings = useCallback(async () => {
-    await commitSettings((current) => resetSettingsPreservingCharacter(current));
+    await commitSettings((current) => {
+      const reset = resetSettingsPreservingCharacter(current);
+      return {
+        ...reset,
+        scale: clampScaleForCharacter(reset.scale, characterRef.current, petViewportRef.current),
+      };
+    });
     if (isTauriRuntime()) await invoke("restore_main_window");
   }, [commitSettings]);
 
@@ -734,6 +802,7 @@ export default function App() {
         name: currentCharacter.manifest.name,
         version: currentCharacter.manifest.version,
         author: currentCharacter.manifest.author,
+        fitScale: fitScaleForCharacter(currentCharacter, petViewportRef.current),
       } : null,
       revision: desktopRevision.current,
     };
@@ -742,7 +811,10 @@ export default function App() {
   const handleDesktopControlRequest = useCallback(async (request: DesktopControlRequest) => {
     if (request.action === "patch-settings") {
       const patch = readSettingsPatch(request.payload);
-      await commitSettings((current) => appSettingsSchema.parse({ ...current, ...patch }));
+      const boundedPatch = patch.scale === undefined
+        ? patch
+        : { ...patch, scale: clampScaleForCharacter(patch.scale, characterRef.current, petViewportRef.current) };
+      await commitSettings((current) => appSettingsSchema.parse({ ...current, ...boundedPatch }));
       return;
     }
     if (request.action === "reset-settings") {
@@ -812,7 +884,7 @@ export default function App() {
     if (!ready) return;
     desktopRevision.current += 1;
     void desktopCoordinator.current?.publishSnapshot().catch((error) => log("warn", "同步设置窗口应用状态失败", error));
-  }, [character, ready, settings]);
+  }, [character, petViewport, ready, settings]);
 
   const showPetContextMenu = useCallback(async (position: { x: number; y: number }) => {
     if (!isTauriRuntime()) return;
@@ -840,6 +912,7 @@ export default function App() {
     updateSuspended={updateSuspended}
     appearanceFeedback={appearanceFeedback}
     updateResultNotice={updateResultNotice}
+    petViewport={petViewport}
   />;
 }
 
@@ -856,9 +929,10 @@ interface RunningProps {
   updateSuspended: boolean;
   appearanceFeedback: string | null;
   updateResultNotice: string | null;
+  petViewport: PetViewportSize;
 }
 
-function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible, onPatch, onToggleSetting, onContextMenu, onReload, updateSuspended, appearanceFeedback, updateResultNotice }: RunningProps) {
+function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible, onPatch, onToggleSetting, onContextMenu, onReload, updateSuspended, appearanceFeedback, updateResultNotice, petViewport }: RunningProps) {
   const [showDebugBounds, setShowDebugBounds] = useState(false);
   const [simulateMissingFrame, setSimulateMissingFrame] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -910,7 +984,7 @@ function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible,
 
   return (
     <>
-      <PetCanvas frame={frame} animation={animation} settings={settings} frameSize={character.manifest.frameSize} anchor={character.manifest.anchor} hitbox={character.manifest.hitbox} visual={character.manifest.visual} characterName={character.manifest.name} interactions={character.manifest.interactions} showDebugBounds={showDebugBounds} simulateMissingFrame={simulateMissingFrame} onState={transition} onInputDiagnostic={(event, latencyMs) => setInputDiagnostic({ event, latencyMs })} onContextMenu={onContextMenu} onFrameError={() => { setSimulateMissingFrame(false); log("warn", "检测到无法显示的动画帧，保留上一有效帧并回退到 idle"); transition("idle", "frame-error", true); }} />
+      <PetCanvas frame={frame} animation={animation} settings={settings} frameSize={character.manifest.frameSize} anchor={character.manifest.anchor} viewport={petViewport} hitbox={character.manifest.hitbox} visual={character.manifest.visual} characterName={character.manifest.name} interactions={character.manifest.interactions} showDebugBounds={showDebugBounds} simulateMissingFrame={simulateMissingFrame} onState={transition} onInputDiagnostic={(event, latencyMs) => setInputDiagnostic({ event, latencyMs })} onContextMenu={onContextMenu} onFrameError={() => { setSimulateMissingFrame(false); log("warn", "检测到无法显示的动画帧，保留上一有效帧并回退到 idle"); transition("idle", "frame-error", true); }} />
       {appearanceFeedback && <div className="pet-notice" role="status">{appearanceFeedback}</div>}
       {!appearanceFeedback && updateResultNotice && <div className="pet-notice" role="status">{updateResultNotice}</div>}
       {DEVELOPER_TOOLS_ALLOWED && settings.developerPanel && <DeveloperPanel

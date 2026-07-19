@@ -1,6 +1,12 @@
 import type { AppSettings } from "../../core/settings/settingsSchema";
 import type { DesktopCharacterSummary, DesktopControlAction, DesktopControlSnapshot } from "../../core/desktopControl";
 import type { UpdaterFailureCategory, UpdaterSnapshot } from "../../core/updater/updaterTypes";
+import {
+  MAX_PET_SIZE_PERCENT,
+  minimumPetSizePercent,
+  petPercentToScale,
+  petScaleToPercent,
+} from "../../core/animation/petScale";
 import { AboutSupportContent } from "../AboutPanel/AboutPanel";
 import { InlineAlert, SettingsRow, Toggle } from "../ui";
 
@@ -40,6 +46,9 @@ export function GeneralSettingsPage({ snapshot, disabled, onPatch }: CommonPageP
 
 export function AppearanceSettingsPage({ snapshot, disabled, actionDisabled, onPatch, onAction }: CommonPageProps) {
   const { settings, character } = snapshot;
+  const fitScale = character?.fitScale ?? 1;
+  const sizePercent = petScaleToPercent(settings.scale, fitScale);
+  const minimumSizePercent = minimumPetSizePercent(fitScale);
   return (
     <section aria-labelledby="settings-section-title">
       <SectionTitle description="调整当前角色、大小、透明度和朝向。">外观</SectionTitle>
@@ -51,8 +60,8 @@ export function AppearanceSettingsPage({ snapshot, disabled, actionDisabled, onP
         <button type="button" className="primary" disabled={actionDisabled} onClick={() => onAction("open-appearance")}>打开外观中心</button>
       </div>
       <div className="settings-section-card">
-        <SettingsRow label={`大小 ${Math.round(settings.scale * 100)}%`} description="只改变桌宠显示大小，不修改角色素材。">
-          {({ labelId, descriptionId }) => <input type="range" min="0.1" max="4" step="0.05" value={settings.scale} disabled={disabled} aria-labelledby={labelId} aria-describedby={descriptionId} onChange={(event) => onPatch({ scale: event.currentTarget.valueAsNumber })} />}
+        <SettingsRow label={`大小 ${sizePercent}%`} description="100% 时角色会刚好容纳在桌宠范围内，不修改角色素材。">
+          {({ labelId, descriptionId }) => <input type="range" min={minimumSizePercent} max={MAX_PET_SIZE_PERCENT} step="1" value={sizePercent} disabled={disabled} aria-labelledby={labelId} aria-describedby={descriptionId} onChange={(event) => onPatch({ scale: petPercentToScale(event.currentTarget.valueAsNumber, fitScale) })} />}
         </SettingsRow>
         <SettingsRow label={`透明度 ${Math.round(settings.opacity * 100)}%`} description="最低保留 20% 可见度。">
           {({ labelId, descriptionId }) => <input type="range" min="0.2" max="1" step="0.05" value={settings.opacity} disabled={disabled} aria-labelledby={labelId} aria-describedby={descriptionId} onChange={(event) => onPatch({ opacity: event.currentTarget.valueAsNumber })} />}

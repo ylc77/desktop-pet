@@ -60,7 +60,7 @@ function snapshot(revision = 1): DesktopControlSnapshot {
   return {
     settings: DEFAULT_SETTINGS,
     updater: updater(),
-    character: { id: "_placeholder", name: "中性占位角色", version: "1.0.0", author: "七酱桌宠" },
+    character: { id: "_placeholder", name: "中性占位角色", version: "1.0.0", author: "七酱桌宠", fitScale: 1 },
     revision,
   };
 }
