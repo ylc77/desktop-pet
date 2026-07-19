@@ -98,8 +98,8 @@ function Read-GitHubUpdaterHostingConfiguration {
     if ($repository -cne 'ylc77/desktop-pet' -or [string](Get-GitHubHostingPropertyValue $configuration 'identifier') -cne 'dev.deskpet.framework') {
         throw 'GitHub updater hosting repository or application identifier does not match the reviewed release identity.'
     }
-    if ([string](Get-GitHubHostingPropertyValue $configuration 'channel') -ne 'beta') {
-        throw 'GitHub updater hosting configuration must use the beta channel.'
+    if ([string](Get-GitHubHostingPropertyValue $configuration 'channel') -ne 'stable') {
+        throw 'GitHub updater hosting configuration must use the stable channel.'
     }
     if ([string](Get-GitHubHostingPropertyValue $configuration 'platform') -ne 'windows-x86_64') {
         throw 'GitHub updater hosting configuration has an unexpected platform.'
@@ -117,7 +117,7 @@ function Read-GitHubUpdaterHostingConfiguration {
         -not (Get-GitHubHostingRequiredBoolean -InputObject $release -Name 'draft') -or
         (Get-GitHubHostingRequiredBoolean -InputObject $release -Name 'prerelease') -or
         -not (Get-GitHubHostingRequiredBoolean -InputObject $release -Name 'immutableVersionedAssets')) {
-        throw 'GitHub updater releases must be immutable and draft-first with v-prefixed version tags; the GitHub prerelease flag must remain false so releases/latest can select the beta release.'
+        throw 'GitHub updater releases must be immutable and draft-first with v-prefixed version tags; the GitHub prerelease flag must remain false so releases/latest can select the stable release.'
     }
 
     $metadata = Get-GitHubHostingPropertyValue $configuration 'metadata'
@@ -137,7 +137,7 @@ function Read-GitHubUpdaterHostingConfiguration {
     $expectedVersionedTemplate = 'https://github.com/ylc77/desktop-pet/releases/download/v{version}/latest.json'
     if (-not [string]::Equals($endpoint, $expectedEndpoint, [StringComparison]::Ordinal) -or
         -not [string]::Equals($versionedTemplate, $expectedVersionedTemplate, [StringComparison]::Ordinal)) {
-        throw 'GitHub Releases metadata endpoint and versioned template must exactly match the reviewed beta paths.'
+        throw 'GitHub Releases metadata endpoint and versioned template must exactly match the reviewed stable paths.'
     }
 
     return $configuration

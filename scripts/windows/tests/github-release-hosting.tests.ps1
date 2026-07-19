@@ -32,7 +32,8 @@ try {
     $configuration = Read-GitHubUpdaterHostingConfiguration -LiteralPath $configurationPath
     Test-Equal 'Formal GitHub hosting configuration is enabled' $true ([bool]$configuration.enabled)
     Test-Equal 'Configured GitHub repository is exact' 'ylc77/desktop-pet' ([string]$configuration.repository)
-    Test-Equal 'Beta metadata uses the exact reviewed GitHub Releases latest asset path' 'https://github.com/ylc77/desktop-pet/releases/latest/download/latest.json' ([string]$configuration.metadata.endpoint)
+    Test-Equal 'Stable channel is selected for the formal release' 'stable' ([string]$configuration.channel)
+    Test-Equal 'Stable metadata uses the exact reviewed GitHub Releases latest asset path' 'https://github.com/ylc77/desktop-pet/releases/latest/download/latest.json' ([string]$configuration.metadata.endpoint)
     Test-Equal 'GitHub Releases metadata is owner-confirmed' $true ([bool]$configuration.metadata.ownerConfirmed)
     Test-Equal 'Hosting configuration has no key or credential fields' $false ([bool]($configurationText -match '(?i)"(?:privateKey|publicKey|password|accessToken|apiToken|secret)"\s*:'))
     Test-Equal 'Hosting configuration uses the stable releases/latest asset route' $true ([bool]($configurationText -match '(?i)/releases/latest/download/latest\.json'))
@@ -68,7 +69,7 @@ try {
     $prereleaseConfiguration.release.prerelease = $true
     $prereleaseConfigurationPath = [System.IO.Path]::Combine($temporaryRoot, 'invalid-prerelease-routing.json')
     [System.IO.File]::WriteAllText($prereleaseConfigurationPath, ($prereleaseConfiguration | ConvertTo-Json -Depth 8), $utf8NoBom)
-    Test-Throws 'releases/latest beta routing rejects the GitHub prerelease flag' {
+    Test-Throws 'releases/latest stable routing rejects the GitHub prerelease flag' {
         Read-GitHubUpdaterHostingConfiguration -LiteralPath $prereleaseConfigurationPath
     } 'prerelease flag|releases/latest'
     $stringSchemaConfiguration = $configurationText | ConvertFrom-Json
@@ -456,7 +457,7 @@ try {
     Test-Equal 'A non-prerelease release is rejected when prerelease is expected' $false ([bool]$stableReleaseState.TargetReleaseStateSatisfied)
     $latestBetaReleaseState = Get-GitHubUpdaterRepositoryState -Repository 'ylc77/desktop-pet' -HeadCommit $commit -Tag "v$version" `
         -AssetNames $plannedAssetNames -ReleaseExpectation Draft -ExpectedPrerelease $false -GitHubCliPath 'fixture-gh.exe' -CommandInvoker $stableReleaseInvoker
-    Test-Equal 'A draft non-prerelease release satisfies the releases/latest beta contract' $true ([bool]$latestBetaReleaseState.TargetReleaseStateSatisfied)
+    Test-Equal 'A draft non-prerelease release satisfies the releases/latest stable contract' $true ([bool]$latestBetaReleaseState.TargetReleaseStateSatisfied)
 
     $extraAssetInvoker = {
         param([string]$FilePath, [string[]]$ArgumentList)

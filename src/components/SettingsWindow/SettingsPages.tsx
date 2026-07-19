@@ -152,7 +152,7 @@ function UpdateStatus({ updater, disabled, onAction }: { updater: UpdaterSnapsho
 
 export function UpdateSettingsPage({ snapshot, disabled, actionDisabled, onPatch, onAction }: CommonPageProps) {
   const version = snapshot.updater.configuration?.currentVersion ?? "读取中…";
-  const channel = snapshot.updater.configuration?.channel ?? "beta";
+  const channel = snapshot.updater.configuration?.channel ?? "stable";
   return (
     <section aria-labelledby="settings-section-title">
       <SectionTitle description="更新只会在你确认后下载和安装。">更新</SectionTitle>
@@ -181,7 +181,7 @@ export function AboutSettingsPage({ snapshot, actionDisabled, feedback, onAction
       <SectionTitle description="查看版本、隐私说明以及本机诊断工具。">关于与支持</SectionTitle>
       <AboutSupportContent
         currentVersion={snapshot.updater.configuration?.currentVersion ?? "读取中…"}
-        channel={snapshot.updater.configuration?.channel ?? "beta"}
+        channel={snapshot.updater.configuration?.channel ?? "stable"}
         lastCheckAt={snapshot.settings.updateLastCheckAt}
         character={snapshot.character as DesktopCharacterSummary | null}
         busy={actionDisabled}

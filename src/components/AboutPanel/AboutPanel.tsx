@@ -132,7 +132,7 @@ export function AboutPanel({ settings, character, updaterStore, onPatch, onInsta
             <h2>七酱桌宠</h2>
           </div>
           <p>版本：{updater.configuration?.currentVersion ?? "读取中…"}</p>
-          <p>更新渠道：{updater.configuration?.channel ?? "beta"}</p>
+          <p>更新渠道：{updater.configuration?.channel ?? "stable"}</p>
           <p>上次检查：{settings.updateLastCheckAt ? new Date(settings.updateLastCheckAt).toLocaleString("zh-CN") : "尚未检查"}</p>
           <label className="about-update-toggle"><input type="checkbox" checked={settings.automaticUpdateChecks} onChange={(event) => onPatch({ automaticUpdateChecks: event.currentTarget.checked })} /> 启动后自动检查更新</label>
         </section>

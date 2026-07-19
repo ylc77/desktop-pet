@@ -1,8 +1,8 @@
 Qijiang Desktop Pet - Third-Party Licenses
 Aggregate-Format-Version: 1
 SPDX-License-List-Version: 3.28.0
-Package-Lock-SHA256: b4a30188fc079f10824b0a022595fc17bba14e88a14453cb428a337f8335bb0f
-Cargo-Lock-SHA256: 8aac692934d1e6290c647b513a4cb98647769d33a88f585d47005fe6fd563194
+Package-Lock-SHA256: d450f4508e67710e99f5b1e3a10642faa343d97e7a9dc71bee6b28e5d9f665f7
+Cargo-Lock-SHA256: 5935b2afb8c8caa1c8f1c3cb73a9488bc49ee5b1aba96f7764b57167cb995b8c
 Package-Count: 531
 License-Text-Count: 268
 

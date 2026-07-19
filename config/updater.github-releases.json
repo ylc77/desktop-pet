@@ -4,7 +4,7 @@
   "provider": "github-releases",
   "repository": "ylc77/desktop-pet",
   "identifier": "dev.deskpet.framework",
-  "channel": "beta",
+  "channel": "stable",
   "platform": "windows-x86_64",
   "installMode": "passive",
   "release": {
@@ -20,5 +20,5 @@
     "versionedEndpointTemplate": "https://github.com/ylc77/desktop-pet/releases/download/v{version}/latest.json",
     "publishAfterRemoteVerification": true
   },
-  "status": "Production updater configuration approved for the beta channel. Versioned assets remain immutable; the published beta release must be explicitly set as GitHub latest and must not use the GitHub prerelease flag. Remote upload remains separately authorized."
+  "status": "Production updater configuration approved for the stable channel. Versioned assets remain immutable; the published stable release must be explicitly set as GitHub latest and must not use the GitHub prerelease flag. Remote upload remains separately authorized."
 }

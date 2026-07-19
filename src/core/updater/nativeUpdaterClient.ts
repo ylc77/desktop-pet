@@ -13,7 +13,7 @@ const browserConfiguration: UpdaterRuntimeConfiguration = {
   status: "unsupported",
   applicationName: "七酱桌宠",
   currentVersion: "0.1.0",
-  channel: "beta",
+  channel: "stable",
   endpointDomain: null,
   publicKeyFingerprint: null,
   installMode: "passive",

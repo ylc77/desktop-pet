@@ -28,7 +28,7 @@ describe("application rebranding", () => {
     const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
     const cargoLockVersion = cargoLock.match(/\[\[package\]\]\r?\nname = "desk-pet-framework"\r?\nversion = "([^"]+)"/)?.[1];
     const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-    expect(packageJson.version).toBe("0.1.2-beta.3");
+    expect(packageJson.version).toBe("0.2.0");
     expect(packageJson.version).toMatch(semver);
     expect(packageLock.version).toBe(packageJson.version);
     expect(packageLock.packages[""].version).toBe(packageJson.version);
@@ -47,6 +47,14 @@ describe("application rebranding", () => {
     }
   });
 
+  it("uses the stable updater channel for the formal release", () => {
+    const hosting = JSON.parse(readFileSync(resolve(root, "config/updater.github-releases.json"), "utf8"));
+    const rust = readFileSync(resolve(root, "src-tauri/src/updater/mod.rs"), "utf8");
+    expect(hosting.channel).toBe("stable");
+    expect(hosting.release.prerelease).toBe(false);
+    expect(rust).toContain('const DEFAULT_CHANNEL: &str = "stable"');
+  });
+
   it("bundles all required Windows icon resources", () => {
     const required = ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.png", "icons/icon.ico"];
     for (const icon of required) {
@@ -54,6 +62,8 @@ describe("application rebranding", () => {
       expect(existsSync(resolve(root, "src-tauri", icon)), icon).toBe(true);
     }
     expect(config.bundle.windows.nsis.installerIcon).toBe("icons/icon.ico");
+    expect(config.bundle.windows.nsis.languages).toEqual(["SimpChinese"]);
+    expect(config.bundle.windows.nsis.displayLanguageSelector).toBe(false);
     expect([...readFileSync(resolve(root, "src-tauri/icons/icon.ico")).subarray(0, 4)]).toEqual([0, 0, 1, 0]);
   });
 

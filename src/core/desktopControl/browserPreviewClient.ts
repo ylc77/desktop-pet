@@ -23,7 +23,7 @@ function initialPreviewSnapshot(): DesktopControlSnapshot {
         status: "notConfigured",
         applicationName: "七酱桌宠",
         currentVersion: packageJson.version,
-        channel: "beta",
+        channel: "stable",
         endpointDomain: null,
         publicKeyFingerprint: null,
         installMode: "passive",

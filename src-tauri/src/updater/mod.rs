@@ -6,7 +6,7 @@ use tauri::{ipc::Channel, AppHandle};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use url::Url;
 
-const DEFAULT_CHANNEL: &str = "beta";
+const DEFAULT_CHANNEL: &str = "stable";
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Serialize)]
