@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-16T08:21:05.350Z",
+  "generatedAt": "2026-07-19T14:19:59.331Z",
   "characters": [
     {
       "id": "_placeholder",
@@ -10,6 +10,16 @@
       "preview": "/characters/_placeholder/preview.png",
       "icon": "/characters/_placeholder/icon.png",
       "manifest": "/characters/_placeholder/manifest.json"
+    },
+    {
+      "id": "qijiang-xiaoyou",
+      "name": "小幽",
+      "version": "0.1.0",
+      "author": "七酱",
+      "license": "七酱桌宠专有内置角色",
+      "preview": "/characters/qijiang-xiaoyou/preview.png",
+      "icon": "/characters/qijiang-xiaoyou/icon.png",
+      "manifest": "/characters/qijiang-xiaoyou/manifest.json"
     }
   ]
 }

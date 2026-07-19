@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "qijiang-xiaoyou",
+  "name": "小幽",
+  "version": "0.1.0",
+  "author": "七酱",
+  "license": "七酱桌宠专有内置角色",
+  "defaultScale": 0.38,
+  "frameSize": {
+    "width": 1024,
+    "height": 1024
+  },
+  "anchor": {
+    "x": 0.5,
+    "y": 0.900391
+  },
+  "hitbox": {
+    "x": 0.19,
+    "y": 0.02,
+    "width": 0.62,
+    "height": 0.88
+  },
+  "visual": {
+    "dropShadow": false,
+    "groundShadow": {
+      "enabled": true,
+      "width": 0.4,
+      "height": 0.05,
+      "opacity": 0.14,
+      "blur": 5
+    }
+  },
+  "preview": "preview.png",
+  "icon": "icon.png",
+  "animations": {
+    "idle": {
+      "path": "animations/idle",
+      "fps": 6,
+      "loop": true,
+      "priority": 10,
+      "weight": 0,
+      "flipXAllowed": false
+    }
+  }
+}
