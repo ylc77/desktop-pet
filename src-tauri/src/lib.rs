@@ -3,7 +3,7 @@ mod diagnostics;
 mod updater;
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use tauri::{
@@ -61,6 +61,52 @@ impl Default for NativeMenuState {
 
 #[derive(Default)]
 struct NativeMenuStateStore(Mutex<NativeMenuState>);
+
+#[derive(Default)]
+struct MainWindowMoveRecovery {
+    generation: AtomicU64,
+    worker_active: AtomicBool,
+}
+
+const MOVE_RECOVERY_QUIET_PERIOD_MS: u64 = 250;
+
+fn schedule_main_window_recovery(app: &AppHandle) {
+    let state = app.state::<MainWindowMoveRecovery>();
+    state.generation.fetch_add(1, Ordering::AcqRel);
+    if state
+        .worker_active
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        let observed_generation = app
+            .state::<MainWindowMoveRecovery>()
+            .generation
+            .load(Ordering::Acquire);
+        std::thread::sleep(std::time::Duration::from_millis(
+            MOVE_RECOVERY_QUIET_PERIOD_MS,
+        ));
+        let state = app.state::<MainWindowMoveRecovery>();
+        if state.generation.load(Ordering::Acquire) != observed_generation {
+            continue;
+        }
+
+        state.worker_active.store(false, Ordering::Release);
+        let recovery_app = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || {
+            if let Some(window) = recovery_app.get_webview_window("main") {
+                clamp_window_to_visible_area(&window);
+            }
+        }) {
+            log::warn!("cannot schedule main window recovery after movement: {error}");
+        }
+        break;
+    });
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingsSection {
@@ -1849,6 +1895,7 @@ pub fn run() {
         .manage(fullscreen_monitor.clone())
         .manage(SettingsFileLock::default())
         .manage(NativeMenuStateStore::default())
+        .manage(MainWindowMoveRecovery::default())
         .manage(character_catalog::CharacterCatalogLock::default())
         .manage(character_catalog::ActiveCharacterState::default())
         .manage(updater::UpdaterState::default())
@@ -1923,11 +1970,17 @@ pub fn run() {
                 }
                 return;
             }
+            if matches!(event, WindowEvent::Moved(_)) && window.label() == "main" {
+                // Walking and dragging can emit dozens of Moved events per
+                // second. Recover only after movement has gone quiet so monitor
+                // enumeration never runs synchronously on that hot path.
+                schedule_main_window_recovery(window.app_handle());
+                return;
+            }
             if matches!(
                 event,
-                WindowEvent::Moved(_)
-                    | WindowEvent::Resized(_)
-                    | WindowEvent::Focused(true)
+                WindowEvent::Resized(_)
+                    | WindowEvent::Focused(_)
                     | WindowEvent::ScaleFactorChanged { .. }
             ) {
                 if let Some(webview) = window.app_handle().get_webview_window(window.label()) {

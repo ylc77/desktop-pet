@@ -69,6 +69,21 @@ describe("release engineering safeguards", () => {
     expect(smoke).toContain("show_settings_window");
     expect(smoke).toContain("show_appearance_window");
     expect(smoke).toContain("aboutBlankTargetCount");
+    expect(smoke).toContain("settingsClosed");
+    expect(smoke).toContain("appearanceClosed");
+    expect(smoke).toContain("plugin:window|close");
+  });
+
+  it("debounces monitor recovery after continuous pet movement", () => {
+    const rust = readFileSync(resolve(root, "src-tauri/src/lib.rs"), "utf8");
+    const recoveryStart = rust.indexOf("Walking and dragging can emit dozens");
+    const recoveryEnd = rust.indexOf(".run(tauri::generate_context!())", recoveryStart);
+    const recovery = rust.slice(recoveryStart, recoveryEnd);
+    expect(recoveryStart).toBeGreaterThanOrEqual(0);
+    expect(rust).toContain("MOVE_RECOVERY_QUIET_PERIOD_MS: u64 = 250");
+    expect(recovery).toContain("schedule_main_window_recovery(window.app_handle())");
+    expect(rust).toContain("WindowEvent::Moved(_)");
+    expect(recovery).toContain("WindowEvent::Focused(_)");
   });
 
   it("keeps developer diagnostics behind the production build gate", () => {

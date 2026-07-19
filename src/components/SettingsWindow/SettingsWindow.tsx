@@ -11,6 +11,7 @@ import {
 } from "../../core/desktopControl";
 import { isTauriRuntime } from "../../core/window/windowController";
 import type { AppSettings } from "../../core/settings/settingsSchema";
+import { log } from "../../core/diagnostics/logger";
 import { ConfirmDialog, InlineAlert, SettingsNavigation, WindowHeader } from "../ui";
 import {
   AboutSettingsPage,
@@ -148,12 +149,20 @@ export function SettingsWindow({ client: providedClient, onClose }: Props) {
     if (!isTauriRuntime()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void getCurrentWindow().onCloseRequested((event) => {
-      if (!patchInFlight.current && !queuedPatch.current) return;
+    const currentWindow = getCurrentWindow();
+    const destroyWindow = () => currentWindow.destroy()
+      .catch((error) => log("warn", "关闭设置窗口失败", error));
+    void currentWindow.onCloseRequested((event) => {
+      // Tauri automatically prevents native close while a JavaScript close
+      // listener exists. Explicitly destroy after any required save finishes.
       event.preventDefault();
+      if (!patchInFlight.current && !queuedPatch.current) {
+        void destroyWindow();
+        return;
+      }
       void flushPatchQueue().then((saved) => {
         if (!saved || disposed) return;
-        return getCurrentWindow().close();
+        return destroyWindow();
       }).catch(() => undefined);
     }).then((dispose) => {
       if (disposed) dispose();

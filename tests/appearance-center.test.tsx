@@ -76,10 +76,15 @@ function makeApi(imported = true, selectedId = "official", catalog: CharacterCat
 describe("AppearanceCenter", () => {
   it("protects an accepted delete transaction from window-close interruption", () => {
     const source = readFileSync(resolve(process.cwd(), "src/components/AppearanceCenter/AppearanceCenter.tsx"), "utf8");
+    const capability = readFileSync(resolve(process.cwd(), "src-tauri/capabilities/appearance.json"), "utf8");
     expect(source).toContain("onCloseRequested");
     expect(source).toContain("removalTransactionActive.current");
     expect(source).toContain("event.preventDefault()");
+    expect(source).toContain("currentWindow.destroy()");
+    expect(source).toContain("getCurrentWindow().destroy()");
     expect(source).toContain("finishRemovalTransaction()");
+    expect(capability).toContain('"core:window:allow-close"');
+    expect(capability).toContain('"core:window:allow-destroy"');
   });
 
   it("shows lazy previews, source/status metadata, and blocks broken selections", async () => {

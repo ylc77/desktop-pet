@@ -6,6 +6,8 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
     "allow-list-installed-characters",
     "allow-import-character-package",
     "allow-remove-installed-character",

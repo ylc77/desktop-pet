@@ -135,7 +135,13 @@ async function waitForSecondaryWindows(port, child, timeoutMilliseconds = 20_000
           rootChildren: document.getElementById('root')?.childElementCount || 0,
           bodyText: (document.body?.innerText || '').slice(0, 2000)
         })`, 5_000);
-        states.push({ targetUrl: target.url, targetTitle: target.title, ...JSON.parse(value) });
+        states.push({
+          targetId: target.id,
+          webSocketDebuggerUrl: target.webSocketDebuggerUrl,
+          targetUrl: target.url,
+          targetTitle: target.title,
+          ...JSON.parse(value),
+        });
       } catch {
         // A target may be replaced while WebView2 is navigating; retry the full set.
       }
@@ -148,6 +154,17 @@ async function waitForSecondaryWindows(port, child, timeoutMilliseconds = 20_000
     await delay(250);
   }
   return { states, settings: null, appearance: null };
+}
+
+async function waitForTargetClosed(port, targetId, child, timeoutMilliseconds = 5_000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`Application exited while closing a secondary window (exitCode=${child.exitCode}).`);
+    const targets = await fetchTargets(port);
+    if (!targets.some((target) => target.id === targetId)) return true;
+    await delay(100);
+  }
+  return false;
 }
 
 async function stopChild(child, executableName) {
@@ -179,6 +196,8 @@ const result = {
   commandsResolved: false,
   settingsRendered: false,
   appearanceRendered: false,
+  settingsClosed: false,
+  appearanceClosed: false,
   aboutBlankTargetCount: null,
   processSurvived: false,
   processRemainingAfterCleanup: false,
@@ -243,6 +262,19 @@ try {
   result.processSurvived = child.exitCode === null;
   if (!result.settingsRendered || !result.appearanceRendered || result.aboutBlankTargetCount !== 0 || !result.processSurvived) {
     throw new Error("Secondary WebView2 windows did not render usable application content.");
+  }
+  await evaluate(windows.settings, `(() => {
+    void window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: 'settings' });
+    return true;
+  })()`);
+  result.settingsClosed = await waitForTargetClosed(port, windows.settings.targetId, child);
+  await evaluate(windows.appearance, `(() => {
+    void window.__TAURI_INTERNALS__.invoke('plugin:window|close', { label: 'appearance' });
+    return true;
+  })()`);
+  result.appearanceClosed = await waitForTargetClosed(port, windows.appearance.targetId, child);
+  if (!result.settingsClosed || !result.appearanceClosed || child.exitCode !== null) {
+    throw new Error("Secondary windows did not close through their native close-request path while the application remained running.");
   }
   result.status = "passed";
   exitCode = 0;

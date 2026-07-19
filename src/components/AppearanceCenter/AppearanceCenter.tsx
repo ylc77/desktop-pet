@@ -169,7 +169,7 @@ export function AppearanceCenter({
     removalTransactionActive.current = false;
     if (!closeAfterRemoval.current || !isTauriRuntime()) return;
     closeAfterRemoval.current = false;
-    void getCurrentWindow().close().catch((error) => log("warn", "删除流程结束后关闭外观中心失败", error));
+    void getCurrentWindow().destroy().catch((error) => log("warn", "删除流程结束后关闭外观中心失败", error));
   }, []);
 
   const restoreRemovalFocus = useCallback(() => {
@@ -247,9 +247,15 @@ export function AppearanceCenter({
     if (!isTauriRuntime()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void getCurrentWindow().onCloseRequested((event) => {
-      if (!removalTransactionActive.current) return;
+    const currentWindow = getCurrentWindow();
+    void currentWindow.onCloseRequested((event) => {
+      // Tauri automatically prevents native close while this listener exists.
+      // Force destruction when no protected deletion transaction is active.
       event.preventDefault();
+      if (!removalTransactionActive.current) {
+        void currentWindow.destroy().catch((error) => log("warn", "关闭外观中心失败", error));
+        return;
+      }
       closeAfterRemoval.current = true;
       setFeedback({ kind: "info", text: "正在完成已确认的角色删除，完成后会关闭外观中心…" });
     }).then((dispose) => {

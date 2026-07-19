@@ -12,6 +12,8 @@ export interface MotionDiagnostics {
   dpiScale: number;
 }
 
+export const NATIVE_MOTION_INTERVAL_MS = 50;
+
 export function usePetMotion(
   animation: LoadedAnimation,
   facing: "left" | "right",
@@ -60,7 +62,7 @@ export function usePetMotion(
           });
           state = next;
           if (next.reversed) facingCallback.current(next.direction < 0 ? "left" : "right", movement.reverseTo);
-          if (now - lastWindowUpdate >= 33 && !moveInFlight) {
+          if (now - lastWindowUpdate >= NATIVE_MOTION_INTERVAL_MS && !moveInFlight) {
             lastWindowUpdate = now;
             moveInFlight = true;
             void windowHandle.setPosition(new PhysicalPosition(Math.round(next.position), position.y))

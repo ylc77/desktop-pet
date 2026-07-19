@@ -1,5 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { SettingsWindow } from "../src/components/SettingsWindow/SettingsWindow";
 import { DEFAULT_SETTINGS } from "../src/core/settings/settingsSchema";
 import type {
@@ -102,6 +104,16 @@ afterEach(() => {
 });
 
 describe("SettingsWindow", () => {
+  it("forces the native close request after any pending save finishes", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/components/SettingsWindow/SettingsWindow.tsx"), "utf8");
+    const capability = readFileSync(resolve(process.cwd(), "src-tauri/capabilities/settings.json"), "utf8");
+    expect(source).toContain("onCloseRequested");
+    expect(source).toContain("event.preventDefault()");
+    expect(source).toContain("currentWindow.destroy()");
+    expect(source).not.toContain("return getCurrentWindow().close()");
+    expect(capability).toContain('"core:window:allow-destroy"');
+  });
+
   it("subscribes before ready and does not expose editable controls before a canonical snapshot", async () => {
     const client = new FakeSettingsClient();
     render(<SettingsWindow client={client} onClose={vi.fn()} />);

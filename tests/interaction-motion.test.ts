@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ClickArbiter, DOUBLE_CLICK_WINDOW_MS, exceedsDragThreshold } from "../src/core/animation/interactionArbiter";
 import { stepMotion, type MotionState } from "../src/core/animation/motionModel";
 import { anchorLayout, mirroredHitbox } from "../src/core/animation/renderGeometry";
+import { NATIVE_MOTION_INTERVAL_MS } from "../src/hooks/usePetMotion";
 
 describe("interaction arbitration", () => {
   it("delays one click but turns two releases into only a double click", () => {
@@ -23,6 +24,10 @@ describe("interaction arbitration", () => {
 describe("weighted window motion", () => {
   const config = { speed: 60, acceleration: 120, deceleration: 180, edgePadding: 20 };
   const bounds = { minimum: 0, maximum: 300 };
+
+  it("caps native window movement at 20 updates per second", () => {
+    expect(NATIVE_MOTION_INTERVAL_MS).toBe(50);
+  });
 
   it("accelerates instead of jumping to maximum speed", () => {
     const next = stepMotion({ position: 100, velocity: 0, direction: 1 }, 16, bounds, config);
