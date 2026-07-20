@@ -15,6 +15,7 @@
     "log:default",
     "process:allow-restart",
     "allow-set-fullscreen-auto-hide",
+    "allow-set-pet-interaction-region",
     "allow-quit-app",
     "allow-read-settings-file",
     "allow-write-settings-file",

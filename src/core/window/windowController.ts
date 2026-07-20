@@ -1,6 +1,7 @@
 import { PhysicalPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { log } from "../diagnostics/logger";
 import { invoke } from "@tauri-apps/api/core";
+import type { NormalizedPetInteractionRegion } from "./petInteractionRegion";
 
 export function isTauriRuntime(): boolean { return "__TAURI_INTERNALS__" in window; }
 
@@ -23,6 +24,10 @@ export async function restoreWindowPosition(position: { x: number; y: number } |
 
 export async function startDragging(): Promise<void> {
   if (isTauriRuntime()) await getCurrentWindow().startDragging();
+}
+
+export async function setPetInteractionRegion(region: NormalizedPetInteractionRegion | null): Promise<void> {
+  if (isTauriRuntime()) await invoke("set_pet_interaction_region", { region });
 }
 
 export async function hideWindow(): Promise<void> { if (isTauriRuntime()) await getCurrentWindow().hide(); }

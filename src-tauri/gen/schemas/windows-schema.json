@@ -321,6 +321,12 @@
           "markdownDescription": "Enables the set_fullscreen_auto_hide command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_pet_interaction_region command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-pet-interaction-region",
+          "markdownDescription": "Enables the set_pet_interaction_region command without any pre-configured scope."
+        },
+        {
           "description": "Enables the show_appearance_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-show-appearance-window",
@@ -493,6 +499,12 @@
           "type": "string",
           "const": "deny-set-fullscreen-auto-hide",
           "markdownDescription": "Denies the set_fullscreen_auto_hide command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_pet_interaction_region command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-pet-interaction-region",
+          "markdownDescription": "Denies the set_pet_interaction_region command without any pre-configured scope."
         },
         {
           "description": "Denies the show_appearance_window command without any pre-configured scope.",

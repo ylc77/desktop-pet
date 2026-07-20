@@ -68,6 +68,41 @@ struct MainWindowMoveRecovery {
     worker_active: AtomicBool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NormalizedInteractionRegion {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl NormalizedInteractionRegion {
+    fn validate(self) -> Result<Self, String> {
+        if !self.x.is_finite()
+            || !self.y.is_finite()
+            || !self.width.is_finite()
+            || !self.height.is_finite()
+            || self.x < 0.0
+            || self.y < 0.0
+            || self.width <= 0.0
+            || self.height <= 0.0
+            || self.x + self.width > 1.000_001
+            || self.y + self.height > 1.000_001
+        {
+            return Err("interaction region must be a finite normalized rectangle".to_string());
+        }
+        Ok(self)
+    }
+
+    fn contains(self, x: f64, y: f64) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+}
+
+#[derive(Clone, Default)]
+struct PetCursorPassthroughState(Arc<Mutex<Option<NormalizedInteractionRegion>>>);
+
 const MOVE_RECOVERY_QUIET_PERIOD_MS: u64 = 250;
 
 fn schedule_main_window_recovery(app: &AppHandle) {
@@ -409,6 +444,22 @@ fn set_fullscreen_auto_hide(enabled: bool, state: tauri::State<'_, FullscreenMon
 }
 
 #[tauri::command]
+fn set_pet_interaction_region(
+    region: Option<NormalizedInteractionRegion>,
+    state: tauri::State<'_, PetCursorPassthroughState>,
+) -> Result<(), String> {
+    let region = region
+        .map(NormalizedInteractionRegion::validate)
+        .transpose()?;
+    let mut stored = state
+        .0
+        .lock()
+        .map_err(|_| "interaction region lock is unavailable".to_string())?;
+    *stored = region;
+    Ok(())
+}
+
+#[tauri::command]
 fn quit_app<R: Runtime>(app: AppHandle<R>) {
     app.exit(0);
 }
@@ -577,6 +628,96 @@ impl PhysicalRect {
     fn height(self) -> i32 {
         self.bottom.saturating_sub(self.top).max(0)
     }
+}
+
+fn cursor_is_inside_interaction_region(
+    region: NormalizedInteractionRegion,
+    window: PhysicalRect,
+    cursor_x: i32,
+    cursor_y: i32,
+) -> bool {
+    let width = window.width();
+    let height = window.height();
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    let normalized_x = f64::from(cursor_x.saturating_sub(window.left)) / f64::from(width);
+    let normalized_y = f64::from(cursor_y.saturating_sub(window.top)) / f64::from(height);
+    region.contains(normalized_x, normalized_y)
+}
+
+#[cfg(windows)]
+fn start_pet_cursor_passthrough_monitor<R: Runtime>(
+    window: WebviewWindow<R>,
+    state: PetCursorPassthroughState,
+) {
+    use windows_sys::Win32::{
+        Foundation::{POINT, RECT},
+        UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect},
+    };
+
+    let Ok(hwnd) = window.hwnd() else {
+        log::warn!("cannot obtain the main window handle for transparent cursor passthrough");
+        return;
+    };
+    let hwnd_value = hwnd.0 as isize;
+
+    std::thread::spawn(move || {
+        let hwnd = hwnd_value as windows_sys::Win32::Foundation::HWND;
+        let mut last_ignored = None;
+        let mut failure_reported = false;
+
+        loop {
+            let region = match state.0.lock() {
+                Ok(stored) => *stored,
+                Err(_) => None,
+            };
+            let should_ignore = region
+                .and_then(|region| unsafe {
+                    let mut cursor = POINT::default();
+                    let mut rect = RECT::default();
+                    if GetCursorPos(&mut cursor) == 0 || GetWindowRect(hwnd, &mut rect) == 0 {
+                        return None;
+                    }
+                    Some(!cursor_is_inside_interaction_region(
+                        region,
+                        PhysicalRect {
+                            left: rect.left,
+                            top: rect.top,
+                            right: rect.right,
+                            bottom: rect.bottom,
+                        },
+                        cursor.x,
+                        cursor.y,
+                    ))
+                })
+                .unwrap_or(false);
+
+            if last_ignored != Some(should_ignore) {
+                match window.set_ignore_cursor_events(should_ignore) {
+                    Ok(()) => {
+                        last_ignored = Some(should_ignore);
+                        failure_reported = false;
+                    }
+                    Err(error) => {
+                        if !failure_reported {
+                            log::warn!("cannot update transparent cursor passthrough: {error}");
+                            failure_reported = true;
+                        }
+                    }
+                }
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_pet_cursor_passthrough_monitor<R: Runtime>(
+    _window: WebviewWindow<R>,
+    _state: PetCursorPassthroughState,
+) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -984,11 +1125,12 @@ fn clamp_window_to_visible_area<R: Runtime>(window: &WebviewWindow<R>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        auxiliary_window_layout_for_work_area, centered_position, fully_visible_position,
-        intersection_area, is_app_action_id, is_fullscreen_candidate, logical_to_physical,
-        read_settings_at_path, render_startup_diagnostic, sanitize_plugin_name,
-        summarize_startup_error, window_is_visible_in_work_area, write_settings_at_path,
-        FullscreenWindowInfo, PhysicalRect, SettingsSection,
+        auxiliary_window_layout_for_work_area, centered_position,
+        cursor_is_inside_interaction_region, fully_visible_position, intersection_area,
+        is_app_action_id, is_fullscreen_candidate, logical_to_physical, read_settings_at_path,
+        render_startup_diagnostic, sanitize_plugin_name, summarize_startup_error,
+        window_is_visible_in_work_area, write_settings_at_path, FullscreenWindowInfo,
+        NormalizedInteractionRegion, PhysicalRect, SettingsSection,
     };
     use tauri::{PhysicalPosition, PhysicalSize};
 
@@ -1005,6 +1147,59 @@ mod tests {
             },
             48,
         ));
+    }
+
+    #[test]
+    fn native_cursor_region_uses_normalized_window_coordinates() {
+        let region = NormalizedInteractionRegion {
+            x: 0.2,
+            y: 0.1,
+            width: 0.6,
+            height: 0.8,
+        };
+        let window = PhysicalRect {
+            left: -840,
+            top: 100,
+            right: -420,
+            bottom: 520,
+        };
+        assert!(cursor_is_inside_interaction_region(
+            region, window, -630, 310
+        ));
+        assert!(!cursor_is_inside_interaction_region(
+            region, window, -830, 310
+        ));
+        assert!(!cursor_is_inside_interaction_region(
+            region, window, -630, 90
+        ));
+    }
+
+    #[test]
+    fn invalid_native_cursor_regions_are_rejected() {
+        assert!(NormalizedInteractionRegion {
+            x: 0.2,
+            y: 0.1,
+            width: 0.6,
+            height: 0.8,
+        }
+        .validate()
+        .is_ok());
+        assert!(NormalizedInteractionRegion {
+            x: 0.8,
+            y: 0.1,
+            width: 0.3,
+            height: 0.8,
+        }
+        .validate()
+        .is_err());
+        assert!(NormalizedInteractionRegion {
+            x: 0.0,
+            y: 0.0,
+            width: f64::NAN,
+            height: 1.0,
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -1891,8 +2086,10 @@ fn show_startup_error_message() {}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let fullscreen_monitor = FullscreenMonitor::default();
+    let pet_cursor_passthrough = PetCursorPassthroughState::default();
     let result = tauri::Builder::default()
         .manage(fullscreen_monitor.clone())
+        .manage(pet_cursor_passthrough.clone())
         .manage(SettingsFileLock::default())
         .manage(NativeMenuStateStore::default())
         .manage(MainWindowMoveRecovery::default())
@@ -1901,6 +2098,7 @@ pub fn run() {
         .manage(updater::UpdaterState::default())
         .invoke_handler(tauri::generate_handler![
             set_fullscreen_auto_hide,
+            set_pet_interaction_region,
             quit_app,
             flush_application_logs,
             restore_main_window,
@@ -1952,6 +2150,7 @@ pub fn run() {
             build_tray(app.handle())?;
             if let Some(window) = app.get_webview_window("main") {
                 clamp_window_to_visible_area(&window);
+                start_pet_cursor_passthrough_monitor(window, pet_cursor_passthrough.clone());
             }
             start_fullscreen_monitor(app.handle().clone(), fullscreen_monitor.clone());
             Ok(())

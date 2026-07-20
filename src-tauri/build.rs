@@ -10,6 +10,7 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "set_fullscreen_auto_hide",
+            "set_pet_interaction_region",
             "quit_app",
             "flush_application_logs",
             "restore_main_window",

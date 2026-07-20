@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AppSettings } from "../../core/settings/settingsSchema";
 import type { AnimationState, CharacterManifest, LoadedAnimation } from "../../core/character/types";
-import { startDragging } from "../../core/window/windowController";
+import { setPetInteractionRegion, startDragging } from "../../core/window/windowController";
+import { normalizePetInteractionRegion, samePetInteractionRegion, type NormalizedPetInteractionRegion } from "../../core/window/petInteractionRegion";
 import { log } from "../../core/diagnostics/logger";
 import { anchorLayout, mirroredHitbox } from "../../core/animation/renderGeometry";
 import { clampPetScaleToFit, getPetFitScale, type PetViewportSize } from "../../core/animation/petScale";
@@ -79,6 +80,8 @@ export function BufferedFrame({ source, dropShadow, onError }: { source: string;
 }
 
 export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewport, hitbox, visual, characterName, interactions, showDebugBounds, simulateMissingFrame, onState, onInputDiagnostic, onContextMenu, onFrameError }: Props) {
+  const hitAreaRef = useRef<HTMLDivElement>(null);
+  const publishedInteractionRegion = useRef<NormalizedPetInteractionRegion | null>(null);
   const gesture = useRef<{ x: number; y: number; pointerId: number; dragging: boolean } | null>(null);
   const lastTapInteraction = useRef(Number.NEGATIVE_INFINITY);
   const lastHoverInteraction = useRef(Number.NEGATIVE_INFINITY);
@@ -94,6 +97,45 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewp
   const cooldown = interactions?.cooldownMs ?? 350;
   const desiredFrame = simulateMissingFrame ? "/characters/__missing__/missing_0001.png" : frame;
   const groundShadow = visual?.groundShadow;
+
+  useLayoutEffect(() => {
+    const element = hitAreaRef.current;
+    if (!element) return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      const bounds = element.getBoundingClientRect();
+      const region = normalizePetInteractionRegion(bounds, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+      if (samePetInteractionRegion(region, publishedInteractionRegion.current)) return;
+      publishedInteractionRegion.current = region;
+      void setPetInteractionRegion(region).catch((error) => {
+        log("warn", "无法同步桌宠鼠标穿透区域，已保留普通窗口交互", error);
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    activeAnchor.x,
+    activeAnchor.y,
+    activeHitbox.height,
+    activeHitbox.width,
+    activeHitbox.x,
+    activeHitbox.y,
+    animation.offsetX,
+    animation.offsetY,
+    effectiveScale,
+    frameSize.height,
+    frameSize.width,
+    viewport.height,
+    viewport.width,
+  ]);
+
+  useEffect(() => () => {
+    publishedInteractionRegion.current = null;
+    void setPetInteractionRegion(null).catch(() => undefined);
+  }, []);
 
   useEffect(() => () => {
     if (pendingClickTimer.current !== null) window.clearTimeout(pendingClickTimer.current);
@@ -146,6 +188,7 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewp
             <BufferedFrame source={desiredFrame} dropShadow={visual?.dropShadow !== false} onError={onFrameError} />
           </div>
           <div
+            ref={hitAreaRef}
             className={`pet-hit-area${showDebugBounds ? " debug-visible" : ""}`}
             style={{ left: `${activeHitbox.x * 100}%`, top: `${activeHitbox.y * 100}%`, width: `${activeHitbox.width * 100}%`, height: `${activeHitbox.height * 100}%` }}
             onContextMenu={(event) => { event.preventDefault(); onContextMenu({ x: event.clientX, y: event.clientY }); }}
