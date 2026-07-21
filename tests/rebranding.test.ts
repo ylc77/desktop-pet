@@ -28,7 +28,7 @@ describe("application rebranding", () => {
     const cargoVersion = cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
     const cargoLockVersion = cargoLock.match(/\[\[package\]\]\r?\nname = "desk-pet-framework"\r?\nversion = "([^"]+)"/)?.[1];
     const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-    expect(packageJson.version).toBe("0.2.0");
+    expect(packageJson.version).toBe("0.3.0");
     expect(packageJson.version).toMatch(semver);
     expect(packageLock.version).toBe(packageJson.version);
     expect(packageLock.packages[""].version).toBe(packageJson.version);

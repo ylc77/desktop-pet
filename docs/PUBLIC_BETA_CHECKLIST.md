@@ -1,8 +1,8 @@
-# 0.2.0 正式版验收清单
+# 0.3.0 正式版验收清单
 
-本清单是当前 `0.2.0` 正式版候选 Gate 的状态总表。状态只能填写 `passed`、`failed`、`blocked` 或 `not_executed`，并必须附带当前候选的环境结果 JSON 或真实人工记录。自动化、当前机器、Sandbox、Windows 10 VM、Windows 11 VM 和真实硬件结果不得互相替代。
+本清单是当前 `0.3.0` 正式版候选 Gate 的状态总表。状态只能填写 `passed`、`failed`、`blocked` 或 `not_executed`，并必须附带当前候选的环境结果 JSON 或真实人工记录。自动化、当前机器、Sandbox、Windows 10 VM、Windows 11 VM 和真实硬件结果不得互相替代。
 
-当前结论：**CANDIDATE / NOT_PUBLISHED**。生产 Updater 密钥、公钥和 GitHub Releases endpoint 已确认；`0.2.0` 必须在干净提交上重新构建、签名并验证远端资产。Windows Authenticode 仍为 `NotSigned`。按项目所有者决定，本候选不重复真实 A → B 更新生命周期；该项保持 `not_executed`，不得伪造成通过。
+当前结论：**CANDIDATE / NOT_PUBLISHED**。生产 Updater 密钥、公钥和 GitHub Releases endpoint 已确认；`0.3.0` 必须在干净提交上重新构建、签名并验证远端资产。Windows Authenticode 仍为 `NotSigned`。按项目所有者决定，本候选不重复真实 A → B 更新生命周期；该项保持 `not_executed`，不得伪造成通过。
 
 ## A. 必须通过
 
@@ -10,9 +10,9 @@
 |---|---|---|---|
 | automatic-release | 自动测试及普通 Release 构建 | passed（需在候选 commit 重跑） | Safe QA 环境结果、命令日志、manifest |
 | updater-foundation | Updater/Process 插件、状态机和用户入口 | passed（需在候选 commit 重跑） | 单元测试、Rust 测试、静态配置检查 |
-| updater-production-config | 生产 updater 公钥和 HTTPS endpoint | blocked | 用户确认、外部私钥验证、公钥指纹、最终配置 |
+| updater-production-config | 生产 updater 公钥和 HTTPS endpoint | passed（需签名时复核） | 用户确认、外部私钥验证、公钥指纹、最终配置 |
 | updater-artifacts | 版本化安装包、`.sig`、含实际 size 的 `latest.json` 与 manifest | blocked | 外部生产公钥真实验签及最终产物验证结果 |
-| application-updater-e2e | A 的应用内 updater 下载、安装并重启到 B，且数据保留 | blocked | 原始报告 SHA-256 绑定；严格 integer schema；远端 latest 与本地 B/生产公钥绑定；按 A pending→B restart→B confirmed 顺序观察；只执行 A；设置、完整角色包、启动项和开始菜单均保留；直接安装器覆盖结果不能替代 |
+| application-updater-e2e | A 的应用内 updater 下载、安装并重启到 B，且数据保留 | not_executed（本版不重复） | 历史机制验证只作参考；本候选不伪造新的端到端证据 |
 | current-machine-lifecycle | 当前候选的真实安装、启动、退出和卸载 | not_executed | 当前候选独立报告；历史结果不能替代 |
 | clean-windows-11 | 干净 Windows 11 生命周期 | blocked | Sandbox/VM 独立结果 |
 | clean-windows-10 | 干净 Windows 10 生命周期 | blocked | Windows 10 VM 独立结果 |

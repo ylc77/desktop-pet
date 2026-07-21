@@ -1,10 +1,10 @@
 # 代码签名与 SmartScreen
 
-当前 `0.2.0` 候选尚未配置 Windows Authenticode；最终 NSIS 安装包必须重新检查，预期 `Get-AuthenticodeSignature` 仍返回 `NotSigned`。内部测试人员必须先使用候选发布目录中的 `SHA256SUMS.txt` 核对：
+当前 `0.3.0` 候选尚未配置 Windows Authenticode；最终 NSIS 安装包必须重新检查，预期 `Get-AuthenticodeSignature` 仍返回 `NotSigned`。内部测试人员必须先使用候选发布目录中的 `SHA256SUMS.txt` 核对：
 
 ```powershell
-Get-FileHash '.\release\updater\0.2.0\qijiang-desktop-pet_0.2.0_x64-setup.exe' -Algorithm SHA256
-Get-AuthenticodeSignature '.\release\updater\0.2.0\qijiang-desktop-pet_0.2.0_x64-setup.exe'
+Get-FileHash '.\release\updater\0.3.0\qijiang-desktop-pet_0.3.0_x64-setup.exe' -Algorithm SHA256
+Get-AuthenticodeSignature '.\release\updater\0.3.0\qijiang-desktop-pet_0.3.0_x64-setup.exe'
 ```
 
 不要绕过 SmartScreen、杀毒软件或企业策略。本机未出现警告不代表其他电脑不会出现。

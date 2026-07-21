@@ -1,6 +1,6 @@
 # Windows 代码签名待办
 
-七酱桌宠 `0.2.0` 候选的 Windows Authenticode 状态预计仍为 `NotSigned`，最终值必须对重新构建的安装包实测。Tauri Updater 安全基础的接入不会改变这一状态，也不会让安装包自动成为 Windows 可信发布者。
+七酱桌宠 `0.3.0` 候选的 Windows Authenticode 状态预计仍为 `NotSigned`，最终值必须对重新构建的安装包实测。Tauri Updater 安全基础的接入不会改变这一状态，也不会让安装包自动成为 Windows 可信发布者。
 
 ## Updater 签名与代码签名
 
