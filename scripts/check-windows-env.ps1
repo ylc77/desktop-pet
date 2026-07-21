@@ -17,6 +17,7 @@ function Test-Command([string]$Name, [string[]]$Arguments = @('--version')) {
     catch { Add-Result $Name $false $_.Exception.Message }
 }
 
+Test-Command pwsh
 Test-Command node
 Test-Command npm
 Test-Command rustc

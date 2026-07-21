@@ -9,7 +9,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "build": "npm run validate:characters && npm run validate:updater-config && npm run validate:licenses && tsc -b && vite build",
-    "build:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
+    "build:release": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "validate": "npm run typecheck && npm run test && npm run validate:characters && npm run validate:licenses && npm run build",
@@ -17,12 +17,12 @@
     "validate:updater-config": "node scripts/validate-updater-config.mjs",
     "generate:licenses": "node scripts/generate-third-party-licenses.mjs",
     "validate:licenses": "node scripts/validate-third-party-licenses.mjs",
-    "package:character": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-character.ps1",
+    "package:character": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/package-character.ps1",
     "generate:placeholder": "node scripts/generate-placeholder.mjs",
-    "check:windows-env": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-windows-env.ps1",
-    "release:manifest": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/create-release-manifest.ps1",
-    "qa:safe": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/run-qa-suite.ps1 -Mode Safe",
-    "qa:public-beta:audit": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/audit-public-beta-readiness.ps1"
+    "check:windows-env": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/check-windows-env.ps1",
+    "release:manifest": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/create-release-manifest.ps1",
+    "qa:safe": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/run-qa-suite.ps1 -Mode Safe",
+    "qa:public-beta:audit": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/audit-public-beta-readiness.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

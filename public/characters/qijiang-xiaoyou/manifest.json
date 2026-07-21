@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "qijiang-xiaoyou",
   "name": "小幽",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "author": "七酱",
   "license": "七酱桌宠专有内置角色",
   "defaultScale": 0.38,
@@ -40,6 +40,169 @@
       "priority": 10,
       "weight": 0,
       "flipXAllowed": false
+    },
+    "idle_look": {
+      "path": "animations/idle_look",
+      "fps": 6,
+      "loop": false,
+      "returnTo": "idle",
+      "priority": 20,
+      "weight": 45,
+      "minDelayMs": 20000,
+      "maxDelayMs": 45000,
+      "flipXAllowed": false
+    },
+    "idle_smile": {
+      "path": "animations/idle_smile",
+      "fps": 6,
+      "loop": false,
+      "returnTo": "idle",
+      "priority": 20,
+      "weight": 35,
+      "minDelayMs": 25000,
+      "maxDelayMs": 50000,
+      "flipXAllowed": false
+    },
+    "idle_magic": {
+      "path": "animations/idle_magic",
+      "fps": 8,
+      "loop": false,
+      "returnTo": "idle",
+      "priority": 20,
+      "weight": 20,
+      "minDelayMs": 45000,
+      "maxDelayMs": 90000,
+      "flipXAllowed": false
+    },
+    "walk_left": {
+      "path": "animations/walk_left",
+      "fps": 8,
+      "loop": true,
+      "returnTo": "idle",
+      "priority": 30,
+      "weight": 0,
+      "minDelayMs": 9000,
+      "maxDelayMs": 18000,
+      "minDurationMs": 2600,
+      "maxDurationMs": 5200,
+      "scale": 1.08,
+      "flipXAllowed": false,
+      "movement": {
+        "speed": 46,
+        "acceleration": 140,
+        "deceleration": 190,
+        "edgePadding": 24,
+        "direction": "left",
+        "reverseTo": "walk_right"
+      }
+    },
+    "walk_right": {
+      "path": "animations/walk_right",
+      "fps": 8,
+      "loop": true,
+      "returnTo": "idle",
+      "priority": 30,
+      "weight": 0,
+      "minDelayMs": 9000,
+      "maxDelayMs": 18000,
+      "minDurationMs": 2600,
+      "maxDurationMs": 5200,
+      "scale": 1.08,
+      "flipXAllowed": false,
+      "movement": {
+        "speed": 46,
+        "acceleration": 140,
+        "deceleration": 190,
+        "edgePadding": 24,
+        "direction": "right",
+        "reverseTo": "walk_left"
+      }
+    },
+    "sleep": {
+      "path": "animations/sleep",
+      "fps": 2,
+      "loop": true,
+      "returnTo": "idle",
+      "interruptible": false,
+      "priority": 40,
+      "weight": 5,
+      "minDelayMs": 90000,
+      "maxDelayMs": 150000,
+      "minDurationMs": 12000,
+      "maxDurationMs": 24000,
+      "anticipation": "sleep_enter",
+      "recovery": "sleep_wake",
+      "flipXAllowed": false
+    },
+    "sleep_enter": {
+      "path": "animations/sleep_enter",
+      "fps": 4,
+      "loop": false,
+      "returnTo": "idle",
+      "interruptible": false,
+      "priority": 40,
+      "flipXAllowed": false
+    },
+    "sleep_wake": {
+      "path": "animations/sleep_wake",
+      "fps": 4,
+      "loop": false,
+      "returnTo": "idle",
+      "interruptible": false,
+      "priority": 40,
+      "flipXAllowed": false
+    },
+    "hover": {
+      "path": "animations/hover",
+      "fps": 8,
+      "loop": false,
+      "returnTo": "idle",
+      "priority": 50,
+      "flipXAllowed": false
+    },
+    "click": {
+      "path": "animations/click",
+      "fps": 10,
+      "loop": false,
+      "returnTo": "idle",
+      "interruptible": false,
+      "priority": 80,
+      "flipXAllowed": false
+    },
+    "double_click": {
+      "path": "animations/double_click",
+      "fps": 12,
+      "loop": false,
+      "returnTo": "idle",
+      "interruptible": false,
+      "priority": 90,
+      "flipXAllowed": false
+    },
+    "drag": {
+      "path": "animations/drag",
+      "fps": 8,
+      "loop": true,
+      "returnTo": "idle",
+      "interruptible": false,
+      "priority": 100,
+      "flipXAllowed": false
+    },
+    "land": {
+      "path": "animations/land",
+      "fps": 12,
+      "loop": false,
+      "returnTo": "idle",
+      "interruptible": false,
+      "priority": 95,
+      "flipXAllowed": false
     }
+  },
+  "interactions": {
+    "click": "click",
+    "doubleClick": "double_click",
+    "hover": "hover",
+    "drag": "drag",
+    "land": "land",
+    "cooldownMs": 350
   }
 }

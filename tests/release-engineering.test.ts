@@ -13,6 +13,9 @@ describe("release engineering safeguards", () => {
   it("fails release builds through the environment-aware wrapper", () => {
     const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
     expect(packageJson.scripts["build:release"]).toContain("scripts/build-release.ps1");
+    for (const name of ["build:release", "package:character", "check:windows-env", "release:manifest", "qa:safe", "qa:public-beta:audit"]) {
+      expect(packageJson.scripts[name], name).toMatch(/^pwsh\s/);
+    }
     const wrapper = readFileSync(resolve(root, "scripts/build-release.ps1"), "utf8");
     expect(wrapper).toContain("Get-Command $commandName");
     expect(wrapper).not.toMatch(/C:\\Users\\[^%]/i);
@@ -20,6 +23,11 @@ describe("release engineering safeguards", () => {
     const manifestScript = readFileSync(resolve(root, "scripts/create-release-manifest.ps1"), "utf8");
     expect(manifestScript).toContain("git -C $repo status --porcelain --untracked-files=normal");
     expect(manifestScript).not.toMatch(/--untracked-files=no(?:\s|$)/);
+    expect(manifestScript).toContain("[System.Security.Cryptography.SHA256]::Create()");
+    expect(manifestScript).not.toContain("Get-FileHash");
+
+    const dispatcher = readFileSync(resolve(root, "scripts/windows/run-qa-suite.ps1"), "utf8");
+    expect(dispatcher).toContain("powershell.exe -NoProfile");
   });
 
   it("limits native log files and atomically replaces settings", () => {

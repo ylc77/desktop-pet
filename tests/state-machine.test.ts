@@ -38,6 +38,22 @@ describe("AnimationStateMachine", () => {
     expect(machine.chooseAmbient(vi.fn(() => 0))).toBe("click");
   });
 
+  it("does not choose autonomous window movement as an ambient action", () => {
+    const character = makeCharacter();
+    character.animations.walk = {
+      state: "walk",
+      path: "walk",
+      fps: 8,
+      loop: true,
+      weight: 10_000,
+      movement: { speed: 60 },
+      frames: ["walk.png"],
+    };
+    character.animations.click!.weight = 1;
+
+    expect(new AnimationStateMachine(character).chooseAmbient(() => 0)).toBe("click");
+  });
+
   it("runs optional anticipation and recovery phases without changing schema version", () => {
     const character = makeCharacter();
     character.animations.prepare = { state: "prepare", path: "prepare", fps: 8, loop: false, frames: ["prepare.png"] };

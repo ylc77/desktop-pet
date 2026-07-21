@@ -1,4 +1,4 @@
-import { PhysicalPosition, getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalPosition, PhysicalPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { log } from "../diagnostics/logger";
 import { invoke } from "@tauri-apps/api/core";
 import type { NormalizedPetInteractionRegion } from "./petInteractionRegion";
@@ -22,8 +22,34 @@ export async function restoreWindowPosition(position: { x: number; y: number } |
   catch (error) { log("warn", "恢复窗口位置失败，将使用系统默认位置", error); }
 }
 
-export async function startDragging(): Promise<void> {
-  if (isTauriRuntime()) await getCurrentWindow().startDragging();
+export interface ManualWindowDragSession {
+  pointerStart: { x: number; y: number };
+  windowStart: { x: number; y: number };
+}
+
+export async function beginManualWindowDrag(pointerStart: { x: number; y: number }): Promise<ManualWindowDragSession | null> {
+  if (!isTauriRuntime()) return null;
+  const windowHandle = getCurrentWindow();
+  const [position, scaleFactor] = await Promise.all([
+    windowHandle.outerPosition(),
+    windowHandle.scaleFactor(),
+  ]);
+  const logicalPosition = position.toLogical(scaleFactor);
+  return {
+    pointerStart,
+    windowStart: { x: logicalPosition.x, y: logicalPosition.y },
+  };
+}
+
+export async function updateManualWindowDrag(
+  session: ManualWindowDragSession | null,
+  pointer: { x: number; y: number },
+): Promise<void> {
+  if (!isTauriRuntime() || !session) return;
+  await getCurrentWindow().setPosition(new LogicalPosition(
+    Math.round(session.windowStart.x + pointer.x - session.pointerStart.x),
+    Math.round(session.windowStart.y + pointer.y - session.pointerStart.y),
+  ));
 }
 
 export async function setPetInteractionRegion(region: NormalizedPetInteractionRegion | null): Promise<void> {

@@ -1,12 +1,13 @@
 # 七酱桌宠
 
-七酱桌宠是一个离线优先、资源包驱动的 Windows 桌宠应用，底层保留可扩展的通用桌宠框架。技术栈为 Tauri 2、React、TypeScript、Rust 和 Vite。当前版本不包含 AI、账号、支付、提醒、云同步、遥测或广告；生产 updater 公钥与 GitHub Releases beta endpoint 已确认，签名候选与真实 A → B 验证仍在发布 Gate 内。
+七酱桌宠是一个离线优先、资源包驱动的 Windows 桌宠应用，底层保留可扩展的通用桌宠框架。技术栈为 Tauri 2、React、TypeScript、Rust 和 Vite。当前版本不包含 AI、账号、支付、提醒、云同步、遥测或广告；生产 Updater 公钥与 GitHub Releases 稳定渠道 endpoint 已配置，新的正式版本仍须逐次完成签名、远端资产验证和发布 Gate。
 
 ## 已实现
 
 - 透明无边框窗口、置顶、缩放、透明度和多显示器可见区域修正
 - 单实例运行、系统托盘、临时隐藏、恢复位置和安全退出
 - 点击、双击、悬停、拖动阈值、落地反馈和互动冷却
+- 不自动巡游；用户向左或向右拖动时切换为对应方向、双脚合拢的悬浮移动动画
 - 配置驱动的 PNG 序列帧播放器与状态机
 - `idle`、`blink`、`walk`、`sleep`、`click`、`drag`、`land`、`happy`
 - 支持资源包自定义动作名，例如 `walk_left`、`walk_right`、`hover`、`double_click`
@@ -19,11 +20,12 @@
 - Tauri 2 Updater/Process 安全更新基础；未配置构建保持离线且不下载安装，生产发布工具要求真实密码学验签
 - NSIS Windows 安装包配置
 
-当前源码内置中性几何回退角色和首套正式角色“小幽”。小幽 `0.1.0` 目前包含已验收的 8 帧 Idle；尚未完成的交互与移动动作会按现有协议安全回退到 Idle，不会在业务代码中硬编码角色外观。
+当前源码内置中性几何回退角色和首套正式角色“小幽”。小幽角色包 `0.4.0` 包含 14 个动作、110 帧透明 PNG，在 Idle、左右冰晶漂浮、睡眠及过渡、悬停、点击、双击、拖动和落地之外，新增左右观察、眨眼微笑和掌心冰雪魔法三组低频待机动作。桌宠不会自行在桌面巡游；按住并向左或向右拖动时，小幽会明显转向对应方向，以双脚合拢、离地悬浮的姿势跟随鼠标，松手后播放落地反馈。角色仍完全通过资源包接入，业务代码没有硬编码角色外观。
 
 ## 环境要求
 
 - Windows 10 或 Windows 11
+- PowerShell 7（项目 npm 脚本默认使用 `pwsh`；Windows QA 仍保留 PowerShell 5.1 兼容回归）
 - Node.js 22 或更新版本
 - Rust stable（通过 rustup 安装）
 - Microsoft WebView2 与 Visual Studio C++ Build Tools（Windows 10 通常需要确认）

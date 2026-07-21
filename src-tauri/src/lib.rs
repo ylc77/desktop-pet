@@ -1828,7 +1828,6 @@ fn build_native_menu<R: Runtime>(
         !state.update_busy,
         None::<&str>,
     )?;
-    let about = MenuItem::with_id(app, "about", "关于七酱桌宠", true, None::<&str>)?;
     let reset = MenuItem::with_id(app, "reset", "恢复默认位置", true, None::<&str>)?;
     let visible = main_window_is_visible(app);
     let visibility = MenuItem::with_id(
@@ -1848,7 +1847,7 @@ fn build_native_menu<R: Runtime>(
         if state.update_busy {
             "更新安装中，暂不可退出"
         } else {
-            "退出七酱桌宠"
+            "退出"
         },
         !state.update_busy,
         None::<&str>,
@@ -1861,15 +1860,14 @@ fn build_native_menu<R: Runtime>(
         NativeMenuSurface::Pet => Menu::with_items(
             app,
             &[
-                &appearance,
-                &settings,
-                &separator_one,
                 &pause,
                 &visibility,
+                &separator_one,
+                &appearance,
+                &settings,
                 &separator_two,
                 &autostart,
                 &check_updates,
-                &about,
                 &separator_three,
                 &quit,
             ],
@@ -1886,7 +1884,6 @@ fn build_native_menu<R: Runtime>(
                 &autostart,
                 &separator_two,
                 &check_updates,
-                &about,
                 &separator_three,
                 &reset,
                 &quit,

@@ -1,7 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { AppSettings } from "../../core/settings/settingsSchema";
 import type { AnimationState, CharacterManifest, LoadedAnimation } from "../../core/character/types";
-import { setPetInteractionRegion, startDragging } from "../../core/window/windowController";
+import {
+  beginManualWindowDrag,
+  setPetInteractionRegion,
+  updateManualWindowDrag,
+  type ManualWindowDragSession,
+} from "../../core/window/windowController";
 import { normalizePetInteractionRegion, samePetInteractionRegion, type NormalizedPetInteractionRegion } from "../../core/window/petInteractionRegion";
 import { log } from "../../core/diagnostics/logger";
 import { anchorLayout, mirroredHitbox } from "../../core/animation/renderGeometry";
@@ -19,6 +25,9 @@ interface Props {
   visual?: CharacterManifest["visual"];
   characterName: string;
   interactions?: CharacterManifest["interactions"];
+  dragMovementStates?: Partial<Record<"left" | "right", AnimationState>>;
+  dragMovementPreviews?: Partial<Record<"left" | "right", string>>;
+  interactionOverlayActive?: boolean;
   showDebugBounds: boolean;
   simulateMissingFrame: boolean;
   onState: (state: AnimationState, reason: string, force?: boolean) => boolean;
@@ -28,6 +37,16 @@ interface Props {
 }
 
 interface FrameLayers { sources: [string, string]; active: 0 | 1; pending: 0 | 1 | null }
+
+export function resolveDragMovementState(
+  horizontalDelta: number,
+  facing: "left" | "right",
+  directionalStates: Props["dragMovementStates"],
+  fallback: AnimationState,
+): AnimationState {
+  const direction = horizontalDelta < 0 ? "left" : horizontalDelta > 0 ? "right" : facing;
+  return directionalStates?.[direction] ?? fallback;
+}
 
 export function BufferedFrame({ source, dropShadow, onError }: { source: string; dropShadow: boolean; onError: () => void }) {
   const [layers, setLayers] = useState<FrameLayers>({ sources: [source, source], active: 0, pending: null });
@@ -79,16 +98,29 @@ export function BufferedFrame({ source, dropShadow, onError }: { source: string;
   </div>;
 }
 
-export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewport, hitbox, visual, characterName, interactions, showDebugBounds, simulateMissingFrame, onState, onInputDiagnostic, onContextMenu, onFrameError }: Props) {
+export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewport, hitbox, visual, characterName, interactions, dragMovementStates, dragMovementPreviews, interactionOverlayActive = false, showDebugBounds, simulateMissingFrame, onState, onInputDiagnostic, onContextMenu, onFrameError }: Props) {
   const hitAreaRef = useRef<HTMLDivElement>(null);
   const publishedInteractionRegion = useRef<NormalizedPetInteractionRegion | null>(null);
-  const gesture = useRef<{ x: number; y: number; pointerId: number; dragging: boolean } | null>(null);
+  const gesture = useRef<{
+    x: number;
+    y: number;
+    screenX: number;
+    screenY: number;
+    pointerId: number;
+    dragging: boolean;
+    dragState: AnimationState | null;
+  } | null>(null);
+  const manualDragSession = useRef<Promise<ManualWindowDragSession | null> | null>(null);
+  const queuedManualMove = useRef<{ pointerId: number; x: number; y: number; startedAt: number } | null>(null);
+  const manualMoveFrame = useRef<number | null>(null);
   const lastTapInteraction = useRef(Number.NEGATIVE_INFINITY);
   const lastHoverInteraction = useRef(Number.NEGATIVE_INFINITY);
   const clickArbiter = useRef(new ClickArbiter());
   const pendingClickTimer = useRef<number | null>(null);
   const hoverTimer = useRef<number | null>(null);
   const hoverArmed = useRef(false);
+  const [dragPreviewDirection, setDragPreviewDirection] = useState<"left" | "right" | null>(null);
+  const dragPreviewDirectionRef = useRef<"left" | "right" | null>(null);
   const mirrored = animation.movement?.direction === undefined && settings.facing === "left" && animation.flipXAllowed !== false;
   const activeAnchor = { x: mirrored ? 1 - anchor.x : anchor.x, y: anchor.y };
   const fitScale = getPetFitScale(frameSize, activeAnchor, viewport);
@@ -103,11 +135,12 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewp
     if (!element) return;
 
     const frameId = window.requestAnimationFrame(() => {
-      const bounds = element.getBoundingClientRect();
-      const region = normalizePetInteractionRegion(bounds, {
-        width: window.innerWidth,
-        height: window.innerHeight,
-      });
+      const region = interactionOverlayActive
+        ? null
+        : normalizePetInteractionRegion(element.getBoundingClientRect(), {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
       if (samePetInteractionRegion(region, publishedInteractionRegion.current)) return;
       publishedInteractionRegion.current = region;
       void setPetInteractionRegion(region).catch((error) => {
@@ -128,6 +161,7 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewp
     effectiveScale,
     frameSize.height,
     frameSize.width,
+    interactionOverlayActive,
     viewport.height,
     viewport.width,
   ]);
@@ -140,6 +174,7 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewp
   useEffect(() => () => {
     if (pendingClickTimer.current !== null) window.clearTimeout(pendingClickTimer.current);
     if (hoverTimer.current !== null) window.clearTimeout(hoverTimer.current);
+    if (manualMoveFrame.current !== null) window.cancelAnimationFrame(manualMoveFrame.current);
   }, []);
 
   const reportInput = (name: string, startedAt: number) => onInputDiagnostic(name, Math.max(0, performance.now() - startedAt));
@@ -156,14 +191,56 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewp
     pendingClickTimer.current = null;
   };
 
+  const showDragPreview = (state: AnimationState) => {
+    const direction = state === dragMovementStates?.left
+      ? "left"
+      : state === dragMovementStates?.right
+        ? "right"
+        : null;
+    if (!direction || !dragMovementPreviews?.[direction] || dragPreviewDirectionRef.current === direction) return;
+    dragPreviewDirectionRef.current = direction;
+    flushSync(() => setDragPreviewDirection(direction));
+  };
+
+  const clearDragPreview = () => {
+    if (dragPreviewDirectionRef.current === null) return;
+    dragPreviewDirectionRef.current = null;
+    setDragPreviewDirection(null);
+  };
+
   const finishDrag = (reason: string, startedAt: number) => {
     const current = gesture.current;
     if (!current) return;
     gesture.current = null;
+    manualDragSession.current = null;
+    queuedManualMove.current = null;
+    if (manualMoveFrame.current !== null) window.cancelAnimationFrame(manualMoveFrame.current);
+    manualMoveFrame.current = null;
+    clearDragPreview();
     if (current.dragging) {
       onState(interactions?.land ?? "land", reason, true);
       reportInput(reason, startedAt);
     }
+  };
+
+  const queueManualWindowMove = (pointerId: number, x: number, y: number, startedAt: number) => {
+    queuedManualMove.current = { pointerId, x, y, startedAt };
+    if (manualMoveFrame.current !== null) return;
+    manualMoveFrame.current = window.requestAnimationFrame(() => {
+      manualMoveFrame.current = null;
+      const next = queuedManualMove.current;
+      const sessionPromise = manualDragSession.current;
+      queuedManualMove.current = null;
+      if (!next || !sessionPromise) return;
+      void sessionPromise.then(async (session) => {
+        const current = gesture.current;
+        if (!current || current.pointerId !== next.pointerId || !current.dragging) return;
+        await updateManualWindowDrag(session, { x: next.x, y: next.y });
+      }).catch((error) => {
+        log("warn", "桌宠跟随鼠标移动失败，已安全恢复", error);
+        finishDrag("manual-drag-failed", next.startedAt);
+      });
+    });
   };
 
   return (
@@ -184,8 +261,22 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewp
             width: `${(groundShadow.width ?? 0.42) * 100}%`, height: `${(groundShadow.height ?? 0.08) * 100}%`,
             opacity: groundShadow.opacity ?? 0.18, filter: `blur(${groundShadow.blur ?? 5}px)`,
           }} />}
-          <div className="pet-content" style={{ transform: mirrored ? "scaleX(-1)" : undefined }}>
+          <div className={`pet-content${dragPreviewDirection ? " drag-preview-active" : ""}`} style={{ transform: mirrored ? "scaleX(-1)" : undefined }}>
             <BufferedFrame source={desiredFrame} dropShadow={visual?.dropShadow !== false} onError={onFrameError} />
+            {dragMovementPreviews?.left && <img
+              className={`pet-drag-preview${dragPreviewDirection === "left" ? " active" : ""}`}
+              draggable={false}
+              src={dragMovementPreviews.left}
+              alt=""
+              aria-hidden="true"
+            />}
+            {dragMovementPreviews?.right && <img
+              className={`pet-drag-preview${dragPreviewDirection === "right" ? " active" : ""}`}
+              draggable={false}
+              src={dragMovementPreviews.right}
+              alt=""
+              aria-hidden="true"
+            />}
           </div>
           <div
             ref={hitAreaRef}
@@ -194,28 +285,46 @@ export function PetCanvas({ frame, animation, settings, frameSize, anchor, viewp
             onContextMenu={(event) => { event.preventDefault(); onContextMenu({ x: event.clientX, y: event.clientY }); }}
             onPointerDown={(event) => {
               if (event.button !== 0) return;
-              gesture.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId, dragging: false };
+              gesture.current = {
+                x: event.clientX,
+                y: event.clientY,
+                screenX: event.screenX,
+                screenY: event.screenY,
+                pointerId: event.pointerId,
+                dragging: false,
+                dragState: null,
+              };
+              manualDragSession.current = beginManualWindowDrag({ x: event.screenX, y: event.screenY });
               event.currentTarget.setPointerCapture(event.pointerId);
             }}
             onPointerMove={(event) => {
               const current = gesture.current;
-              if (!current || current.pointerId !== event.pointerId || current.dragging) return;
-              if (exceedsDragThreshold(current, { x: event.clientX, y: event.clientY })) {
+              if (!current || current.pointerId !== event.pointerId) return;
+              if (!current.dragging && exceedsDragThreshold(current, { x: event.clientX, y: event.clientY })) {
                 current.dragging = true;
                 clearPendingClickTimer();
                 clickArbiter.current.cancel();
-                onState(interactions?.drag ?? "drag", "pointer-drag", true);
-                void startDragging().catch((error) => {
-                  log("warn", "原生拖动启动失败，已安全恢复", error);
-                  finishDrag("drag-start-failed", event.timeStamp);
-                });
               }
+              if (!current.dragging) return;
+              const nextState = resolveDragMovementState(
+                event.screenX - current.screenX,
+                settings.facing,
+                dragMovementStates,
+                interactions?.drag ?? "drag",
+              );
+              if (current.dragState !== nextState) {
+                current.dragState = nextState;
+                showDragPreview(nextState);
+                onState(nextState, "pointer-drag", true);
+              }
+              queueManualWindowMove(event.pointerId, event.screenX, event.screenY, event.timeStamp);
             }}
             onPointerUp={(event) => {
               const current = gesture.current;
               if (!current || current.pointerId !== event.pointerId) return;
               if (current.dragging) { finishDrag("pointer-release", event.timeStamp); return; }
               gesture.current = null;
+              manualDragSession.current = null;
               const result = clickArbiter.current.release(event.timeStamp);
               if (result === "double-click") {
                 clearPendingClickTimer();

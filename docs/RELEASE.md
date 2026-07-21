@@ -14,7 +14,7 @@ cargo test --release --manifest-path src-tauri/Cargo.toml -j1
 npm run build:release
 ```
 
-`build:release` 会先确认 Node、npm、Rustup、Rustc 和 Cargo 位于 PATH。项目不写死开发者用户名或 Cargo 绝对路径。
+项目的 npm 入口默认由 PowerShell 7 的 `pwsh` 执行。`build:release` 会先确认 Node、npm、Rustup、Rustc 和 Cargo 位于 PATH。项目不写死开发者用户名或 Cargo 绝对路径；Windows QA 仍会显式调用 `powershell.exe` 运行 PowerShell 5.1 回归测试，保证旧环境兼容。
 若可用物理内存低于 4 GiB且未手动设置 `CARGO_BUILD_JOBS`，脚本会将本次构建限制为单作业，避免大型 Tauri 依赖并行编译导致 Rustc 内存分配失败；它不会修改永久环境变量。
 Rust 测试 profile 不生成调试符号并关闭增量编译，以降低 Windows 页面文件和 LLVM 链接峰值；这不会跳过测试、警告或优化 Release 产物。
 

@@ -49,7 +49,12 @@ export class BehaviorScheduler {
 
   plan(now: number): AmbientPlan | null {
     const all = (Object.entries(this.character.animations) as [AnimationState, LoadedAnimation | undefined][])
-      .filter(([state, animation]) => animation && !["idle", "drag", "land"].includes(state) && (animation.weight ?? 0) > 0);
+      .filter(([state, animation]) =>
+        animation
+        && !["idle", "drag", "land"].includes(state)
+        && animation.movement === undefined
+        && (animation.weight ?? 0) > 0,
+      );
     if (all.length === 0) return null;
 
     const mostRecent = this.recent.at(-1);

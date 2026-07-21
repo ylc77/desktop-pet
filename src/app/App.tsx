@@ -5,6 +5,7 @@ import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/
 import { invoke } from "@tauri-apps/api/core";
 import { PetCanvas } from "../components/PetCanvas/PetCanvas";
 import { DeveloperPanel } from "../components/DeveloperPanel/DeveloperPanel";
+import { ContextMenu, type PetContextMenuAction } from "../components/ContextMenu/ContextMenu";
 import type { PreparedCharacter } from "../core/character/CharacterLoader";
 import {
   isSelectionRequestExpired,
@@ -886,17 +887,26 @@ export default function App() {
     void desktopCoordinator.current?.publishSnapshot().catch((error) => log("warn", "同步设置窗口应用状态失败", error));
   }, [character, petViewport, ready, settings]);
 
-  const showPetContextMenu = useCallback(async (position: { x: number; y: number }) => {
-    if (!isTauriRuntime()) return;
-    const currentSettings = settingsRef.current;
-    const state: NativeMenuStatePayload = {
-      paused: currentSettings.animationsPaused,
-      alwaysOnTop: currentSettings.alwaysOnTop,
-      autostart: currentSettings.autostart,
-      updateBusy: updaterIsBusy(updaterStore.getSnapshot().status),
-    };
-    await invoke("show_pet_context_menu", { x: position.x, y: position.y, state });
-  }, [updaterStore]);
+  const handlePetContextAction = useCallback((action: PetContextMenuAction) => {
+    if (action === "appearance") {
+      void invoke("show_appearance_window").catch((error) => log("warn", "打开外观中心失败", error));
+      return;
+    }
+    if (action === "settings") {
+      void showSettingsWindow("general").catch((error) => log("warn", "打开设置失败", error));
+      return;
+    }
+    if (action === "check-updates") {
+      void showSettingsWindow("update").catch((error) => log("warn", "打开更新设置失败", error));
+      void updaterStore.check({ manual: true }).catch((error) => log("warn", "菜单检查更新未执行", error));
+      return;
+    }
+    if (action === "hide") {
+      setWindowVisible(false);
+      return;
+    }
+    void flushSettingsAndClose().catch((error) => log("warn", "退出应用失败", error));
+  }, [flushSettingsAndClose, updaterStore]);
 
   if (!ready || !character) return <div className="loading">正在加载占位角色…</div>;
   return <RunningApp
@@ -907,8 +917,9 @@ export default function App() {
     windowVisible={windowVisible}
     onPatch={patchSettings}
     onToggleSetting={toggleSetting}
-    onContextMenu={(position) => void showPetContextMenu(position).catch((error) => log("warn", "打开原生桌宠菜单失败", error))}
+    onContextAction={handlePetContextAction}
     onReload={() => setReloadKey((value) => value + 1)}
+    updateMenuBusy={updateMenuBusy}
     updateSuspended={updateSuspended}
     appearanceFeedback={appearanceFeedback}
     updateResultNotice={updateResultNotice}
@@ -924,15 +935,16 @@ interface RunningProps {
   windowVisible: boolean;
   onPatch: (patch: Partial<AppSettings>) => void;
   onToggleSetting: (key: ToggleableSetting) => void;
-  onContextMenu: (position: { x: number; y: number }) => void;
+  onContextAction: (action: PetContextMenuAction) => void;
   onReload: () => void;
+  updateMenuBusy: boolean;
   updateSuspended: boolean;
   appearanceFeedback: string | null;
   updateResultNotice: string | null;
   petViewport: PetViewportSize;
 }
 
-function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible, onPatch, onToggleSetting, onContextMenu, onReload, updateSuspended, appearanceFeedback, updateResultNotice, petViewport }: RunningProps) {
+function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible, onPatch, onToggleSetting, onContextAction, onReload, updateMenuBusy, updateSuspended, appearanceFeedback, updateResultNotice, petViewport }: RunningProps) {
   const [showDebugBounds, setShowDebugBounds] = useState(false);
   const [simulateMissingFrame, setSimulateMissingFrame] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -941,6 +953,7 @@ function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible,
   const [forceLoop, setForceLoop] = useState(false);
   const [inputDiagnostic, setInputDiagnostic] = useState({ event: "none", latencyMs: 0 });
   const [displayDiagnostic, setDisplayDiagnostic] = useState({ monitor: null as string | null, dpiScale: window.devicePixelRatio || 1 });
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const prefersReducedMotion = usePrefersReducedMotion();
   const runtimeMotionPaused = isRuntimeMotionPaused(settings.animationsPaused, prefersReducedMotion);
   const { machine, snapshot, animation, frameIndex, frame, diagnostics, stepFrame } = useAnimationPlayer(character, {
@@ -956,7 +969,8 @@ function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible,
     onPatch({ facing });
     if (reverseTo) transition(reverseTo, "movement-edge-reverse", true);
   }, [onPatch, transition]);
-  const motion = usePetMotion(animation, settings.facing, runtimeMotionPaused || updateSuspended || !windowVisible, onMotionFacing);
+  const nativeDragActive = snapshot.reason === "pointer-drag";
+  const motion = usePetMotion(animation, settings.facing, runtimeMotionPaused || updateSuspended || !windowVisible || nativeDragActive, onMotionFacing);
 
   useEffect(() => {
     if (!settings.developerPanel || !isTauriRuntime()) return;
@@ -984,7 +998,15 @@ function RunningApp({ character, settings, cacheCount, frameLoad, windowVisible,
 
   return (
     <>
-      <PetCanvas frame={frame} animation={animation} settings={settings} frameSize={character.manifest.frameSize} anchor={character.manifest.anchor} viewport={petViewport} hitbox={character.manifest.hitbox} visual={character.manifest.visual} characterName={character.manifest.name} interactions={character.manifest.interactions} showDebugBounds={showDebugBounds} simulateMissingFrame={simulateMissingFrame} onState={transition} onInputDiagnostic={(event, latencyMs) => setInputDiagnostic({ event, latencyMs })} onContextMenu={onContextMenu} onFrameError={() => { setSimulateMissingFrame(false); log("warn", "检测到无法显示的动画帧，保留上一有效帧并回退到 idle"); transition("idle", "frame-error", true); }} />
+      <PetCanvas frame={frame} animation={animation} settings={settings} frameSize={character.manifest.frameSize} anchor={character.manifest.anchor} viewport={petViewport} hitbox={character.manifest.hitbox} visual={character.manifest.visual} characterName={character.manifest.name} interactions={character.manifest.interactions} dragMovementStates={{ left: character.animations.walk_left ? "walk_left" : undefined, right: character.animations.walk_right ? "walk_right" : undefined }} dragMovementPreviews={{ left: character.animations.walk_left?.frames[0], right: character.animations.walk_right?.frames[0] }} interactionOverlayActive={contextMenuPosition !== null} showDebugBounds={showDebugBounds} simulateMissingFrame={simulateMissingFrame} onState={transition} onInputDiagnostic={(event, latencyMs) => setInputDiagnostic({ event, latencyMs })} onContextMenu={setContextMenuPosition} onFrameError={() => { setSimulateMissingFrame(false); log("warn", "检测到无法显示的动画帧，保留上一有效帧并回退到 idle"); transition("idle", "frame-error", true); }} />
+      {contextMenuPosition && <ContextMenu
+        position={contextMenuPosition}
+        settings={settings}
+        updateBusy={updateMenuBusy}
+        onPatch={onPatch}
+        onAction={onContextAction}
+        onClose={() => setContextMenuPosition(null)}
+      />}
       {appearanceFeedback && <div className="pet-notice" role="status">{appearanceFeedback}</div>}
       {!appearanceFeedback && updateResultNotice && <div className="pet-notice" role="status">{updateResultNotice}</div>}
       {DEVELOPER_TOOLS_ALLOWED && settings.developerPanel && <DeveloperPanel

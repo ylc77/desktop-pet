@@ -89,7 +89,14 @@ export class AnimationStateMachine {
 
   chooseAmbient(random = Math.random): AnimationState {
     const candidates = (Object.entries(this.character.animations) as [AnimationState, LoadedAnimation | undefined][])
-      .filter(([state, animation]) => animation && state !== "idle" && state !== "drag" && state !== "land" && (animation.weight ?? 0) > 0);
+      .filter(([state, animation]) =>
+        animation
+        && state !== "idle"
+        && state !== "drag"
+        && state !== "land"
+        && animation.movement === undefined
+        && (animation.weight ?? 0) > 0,
+      );
     const total = candidates.reduce((sum, [, animation]) => sum + (animation?.weight ?? 0), 0);
     if (total <= 0) return "idle";
     let cursor = random() * total;

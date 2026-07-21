@@ -33,6 +33,23 @@ describe("BehaviorScheduler", () => {
     expect(plan.delayMs).toBe(1_000);
   });
 
+  it("never schedules animations that move the desktop window", () => {
+    const character = ambientCharacter();
+    character.animations.walk = {
+      state: "walk",
+      path: "walk",
+      fps: 8,
+      loop: true,
+      weight: 10_000,
+      movement: { speed: 60 },
+      frames: ["walk.png"],
+    };
+    character.animations.click!.weight = 1;
+    character.animations.wave!.weight = 0;
+
+    expect(new BehaviorScheduler(character, () => 0).plan(0)?.state).toBe("click");
+  });
+
   it("keeps bounded recent history", () => {
     const scheduler = new BehaviorScheduler(ambientCharacter(), () => 0, 2);
     scheduler.record("click", 0); scheduler.record("wave", 1); scheduler.record("click", 2);

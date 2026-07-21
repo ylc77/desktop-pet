@@ -9,6 +9,134 @@
       "animations/idle/idle_0006.png",
       "animations/idle/idle_0007.png",
       "animations/idle/idle_0008.png"
+    ],
+    "idle_look": [
+      "animations/idle_look/idle_look_0001.png",
+      "animations/idle_look/idle_look_0002.png",
+      "animations/idle_look/idle_look_0003.png",
+      "animations/idle_look/idle_look_0004.png",
+      "animations/idle_look/idle_look_0005.png",
+      "animations/idle_look/idle_look_0006.png",
+      "animations/idle_look/idle_look_0007.png",
+      "animations/idle_look/idle_look_0008.png"
+    ],
+    "idle_smile": [
+      "animations/idle_smile/idle_smile_0001.png",
+      "animations/idle_smile/idle_smile_0002.png",
+      "animations/idle_smile/idle_smile_0003.png",
+      "animations/idle_smile/idle_smile_0004.png",
+      "animations/idle_smile/idle_smile_0005.png",
+      "animations/idle_smile/idle_smile_0006.png",
+      "animations/idle_smile/idle_smile_0007.png",
+      "animations/idle_smile/idle_smile_0008.png"
+    ],
+    "idle_magic": [
+      "animations/idle_magic/idle_magic_0001.png",
+      "animations/idle_magic/idle_magic_0002.png",
+      "animations/idle_magic/idle_magic_0003.png",
+      "animations/idle_magic/idle_magic_0004.png",
+      "animations/idle_magic/idle_magic_0005.png",
+      "animations/idle_magic/idle_magic_0006.png",
+      "animations/idle_magic/idle_magic_0007.png",
+      "animations/idle_magic/idle_magic_0008.png",
+      "animations/idle_magic/idle_magic_0009.png",
+      "animations/idle_magic/idle_magic_0010.png",
+      "animations/idle_magic/idle_magic_0011.png",
+      "animations/idle_magic/idle_magic_0012.png"
+    ],
+    "walk_left": [
+      "animations/walk_left/walk_left_0001.png",
+      "animations/walk_left/walk_left_0002.png",
+      "animations/walk_left/walk_left_0003.png",
+      "animations/walk_left/walk_left_0004.png",
+      "animations/walk_left/walk_left_0005.png",
+      "animations/walk_left/walk_left_0006.png",
+      "animations/walk_left/walk_left_0007.png",
+      "animations/walk_left/walk_left_0008.png"
+    ],
+    "walk_right": [
+      "animations/walk_right/walk_right_0001.png",
+      "animations/walk_right/walk_right_0002.png",
+      "animations/walk_right/walk_right_0003.png",
+      "animations/walk_right/walk_right_0004.png",
+      "animations/walk_right/walk_right_0005.png",
+      "animations/walk_right/walk_right_0006.png",
+      "animations/walk_right/walk_right_0007.png",
+      "animations/walk_right/walk_right_0008.png"
+    ],
+    "sleep": [
+      "animations/sleep/sleep_0001.png",
+      "animations/sleep/sleep_0002.png",
+      "animations/sleep/sleep_0003.png",
+      "animations/sleep/sleep_0004.png",
+      "animations/sleep/sleep_0005.png",
+      "animations/sleep/sleep_0006.png"
+    ],
+    "sleep_enter": [
+      "animations/sleep_enter/sleep_enter_0001.png",
+      "animations/sleep_enter/sleep_enter_0002.png",
+      "animations/sleep_enter/sleep_enter_0003.png",
+      "animations/sleep_enter/sleep_enter_0004.png",
+      "animations/sleep_enter/sleep_enter_0005.png",
+      "animations/sleep_enter/sleep_enter_0006.png",
+      "animations/sleep_enter/sleep_enter_0007.png",
+      "animations/sleep_enter/sleep_enter_0008.png"
+    ],
+    "sleep_wake": [
+      "animations/sleep_wake/sleep_wake_0001.png",
+      "animations/sleep_wake/sleep_wake_0002.png",
+      "animations/sleep_wake/sleep_wake_0003.png",
+      "animations/sleep_wake/sleep_wake_0004.png",
+      "animations/sleep_wake/sleep_wake_0005.png",
+      "animations/sleep_wake/sleep_wake_0006.png",
+      "animations/sleep_wake/sleep_wake_0007.png",
+      "animations/sleep_wake/sleep_wake_0008.png"
+    ],
+    "hover": [
+      "animations/hover/hover_0001.png",
+      "animations/hover/hover_0002.png",
+      "animations/hover/hover_0003.png",
+      "animations/hover/hover_0004.png",
+      "animations/hover/hover_0005.png",
+      "animations/hover/hover_0006.png"
+    ],
+    "click": [
+      "animations/click/click_0001.png",
+      "animations/click/click_0002.png",
+      "animations/click/click_0003.png",
+      "animations/click/click_0004.png",
+      "animations/click/click_0005.png",
+      "animations/click/click_0006.png",
+      "animations/click/click_0007.png",
+      "animations/click/click_0008.png"
+    ],
+    "double_click": [
+      "animations/double_click/double_click_0001.png",
+      "animations/double_click/double_click_0002.png",
+      "animations/double_click/double_click_0003.png",
+      "animations/double_click/double_click_0004.png",
+      "animations/double_click/double_click_0005.png",
+      "animations/double_click/double_click_0006.png",
+      "animations/double_click/double_click_0007.png",
+      "animations/double_click/double_click_0008.png",
+      "animations/double_click/double_click_0009.png",
+      "animations/double_click/double_click_0010.png",
+      "animations/double_click/double_click_0011.png",
+      "animations/double_click/double_click_0012.png"
+    ],
+    "drag": [
+      "animations/drag/drag_0001.png",
+      "animations/drag/drag_0002.png",
+      "animations/drag/drag_0003.png",
+      "animations/drag/drag_0004.png"
+    ],
+    "land": [
+      "animations/land/land_0001.png",
+      "animations/land/land_0002.png",
+      "animations/land/land_0003.png",
+      "animations/land/land_0004.png",
+      "animations/land/land_0005.png",
+      "animations/land/land_0006.png"
     ]
   }
 }

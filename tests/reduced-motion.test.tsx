@@ -65,6 +65,7 @@ describe("Windows reduced-motion preference", () => {
   it("keeps RunningApp wired to both frame playback and window movement", () => {
     const source = readFileSync(resolve(process.cwd(), "src/app/App.tsx"), "utf8");
     expect(source).toContain("paused: runtimeMotionPaused || updateSuspended");
-    expect(source).toContain("runtimeMotionPaused || updateSuspended || !windowVisible, onMotionFacing");
+    expect(source).toContain("snapshot.reason === \"pointer-drag\"");
+    expect(source).toContain("runtimeMotionPaused || updateSuspended || !windowVisible || nativeDragActive, onMotionFacing");
   });
 });

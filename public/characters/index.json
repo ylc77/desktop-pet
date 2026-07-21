@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-19T14:19:59.331Z",
+  "generatedAt": "2026-07-21T20:32:17.695Z",
   "characters": [
     {
       "id": "_placeholder",
@@ -14,7 +14,7 @@
     {
       "id": "qijiang-xiaoyou",
       "name": "小幽",
-      "version": "0.1.0",
+      "version": "0.4.0",
       "author": "七酱",
       "license": "七酱桌宠专有内置角色",
       "preview": "/characters/qijiang-xiaoyou/preview.png",
