@@ -63,7 +63,15 @@ function ConvertFrom-GitHubStrictJsonArray {
     if ($trimmed.Length -lt 2 -or $trimmed[0] -ne '[' -or $trimmed[$trimmed.Length - 1] -ne ']') {
         throw "$ResponseName must be a JSON array."
     }
-    try { $document = $trimmed | ConvertFrom-Json -ErrorAction Stop }
+    $convertFromJsonCommand = Get-Command ConvertFrom-Json -ErrorAction Stop
+    $parameters = @{
+        InputObject = $trimmed
+        ErrorAction = 'Stop'
+    }
+    if ($convertFromJsonCommand.Parameters.ContainsKey('NoEnumerate')) {
+        $parameters['NoEnumerate'] = $true
+    }
+    try { $document = ConvertFrom-Json @parameters }
     catch { throw "$ResponseName is not valid JSON." }
     if ($document -isnot [System.Array]) { throw "$ResponseName must be a JSON array." }
     return ,$document

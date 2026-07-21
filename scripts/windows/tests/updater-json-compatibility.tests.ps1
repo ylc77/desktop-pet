@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $repositoryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($PSScriptRoot, '..', '..', '..'))
 . ([System.IO.Path]::Combine($repositoryRoot, 'scripts', 'updater', 'common.ps1'))
+. ([System.IO.Path]::Combine($repositoryRoot, 'scripts', 'updater', 'github-release-common.ps1'))
 
 $results = @()
 function Add-TestResult([string]$Name, [bool]$Passed, [string]$Details) {
@@ -60,6 +61,11 @@ try {
     } catch {
         Add-TestResult 'Non-string pub_date remains rejected' ($_.Exception.Message -match 'must be JSON strings') $_.Exception.Message
     }
+
+    $emptyGitHubArray = ConvertFrom-GitHubStrictJsonArray -Text '[]' -ResponseName 'GitHub tag response'
+    Add-TestResult 'Empty GitHub JSON arrays remain arrays' `
+        ($emptyGitHubArray -is [System.Array] -and $emptyGitHubArray.Count -eq 0) `
+        $(if ($null -eq $emptyGitHubArray) { '<null>' } else { $emptyGitHubArray.GetType().FullName + '; count=' + $emptyGitHubArray.Count })
 } finally {
     if ([System.IO.Directory]::Exists($temporaryRoot)) {
         [System.IO.Directory]::Delete($temporaryRoot, $true)
