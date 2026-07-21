@@ -361,6 +361,21 @@ function Write-Utf8NoBomJson {
     [System.IO.File]::WriteAllText($LiteralPath, $json + [Environment]::NewLine, $script:Utf8NoBom)
 }
 
+function ConvertFrom-UpdaterJsonPreservingStrings {
+    param([Parameter(Mandatory)][string]$Text)
+
+    $convertFromJsonCommand = Get-Command ConvertFrom-Json -ErrorAction Stop
+    $parameters = @{
+        InputObject = $Text
+        ErrorAction = 'Stop'
+    }
+    if ($convertFromJsonCommand.Parameters.ContainsKey('DateKind')) {
+        $parameters['DateKind'] = 'String'
+    }
+
+    return ConvertFrom-Json @parameters
+}
+
 function Test-UpdaterLatestDocument {
     param(
         [Parameter(Mandatory)][string]$LatestJsonPath,
@@ -371,7 +386,7 @@ function Test-UpdaterLatestDocument {
     )
     $json = Get-FileTextWithoutBom -LiteralPath $LatestJsonPath
     Assert-NoUpdaterSensitiveMetadata -Text $json
-    try { $document = $json | ConvertFrom-Json } catch { throw 'latest.json is not valid JSON.' }
+    try { $document = ConvertFrom-UpdaterJsonPreservingStrings -Text $json } catch { throw 'latest.json is not valid JSON.' }
     $topLevelNames = @($document.PSObject.Properties.Name | Sort-Object)
     $expectedTopLevelNames = @('notes','platforms','pub_date','version')
     if (($topLevelNames -join "`n") -cne (($expectedTopLevelNames | Sort-Object) -join "`n")) {
